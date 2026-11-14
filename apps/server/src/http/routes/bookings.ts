@@ -1,6 +1,7 @@
-import rateLimit from '@fastify/rate-limit';
+import { isIP } from 'node:net';
+import rateLimit, { normalizeIP } from '@fastify/rate-limit';
 import type { Clock, Money, RailConnector } from '@pialy/payments';
-import type { FastifyPluginAsync, FastifyReply } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
 import { PastDateError, getSlots } from '../../modules/booking/application/get-slots.js';
 import {
@@ -45,7 +46,7 @@ const HTTP_CONFLICT = 409;
 const HTTP_UNPROCESSABLE = 422;
 const HTTP_TOO_MANY_REQUESTS = 429;
 const HTTP_CREATED = 201;
-/** Per client IP (behind Railway's proxy, from X-Forwarded-For); in memory, so per instance. */
+/** Per client IP (see {@link clientIp}); in memory, so per instance. */
 const HOLDS_PER_IP = { max: 10, timeWindow: 10 * 60_000 } as const;
 const IP_LIMIT_DETAIL = 'Demasiados intentos. Espera unos minutos.';
 const DATE_FORMAT_DETAIL = 'Indica la fecha como AAAA-MM-DD';
@@ -107,6 +108,7 @@ export const bookingRoutes: FastifyPluginAsync<BookingRoutesOptions> = async (ap
   const activeBookings = createDrizzleActiveBookingsReader(db);
   await app.register(rateLimit, {
     global: false,
+    keyGenerator: (request) => normalizeIP(clientIp(request)),
     errorResponseBuilder: (_request, context) => Object.assign(new Error(IP_LIMIT_DETAIL), { statusCode: context.statusCode }),
   });
 
@@ -156,6 +158,16 @@ export const bookingRoutes: FastifyPluginAsync<BookingRoutesOptions> = async (ap
     return view;
   });
 };
+
+/**
+ * Railway's edge sets `X-Real-IP` to the client's address (docs.railway.com, public networking
+ * specs). The left-most `X-Forwarded-For` entry that `request.ip` trusts is client-controlled.
+ */
+function clientIp(request: FastifyRequest): string {
+  const realIp = request.headers['x-real-ip'];
+  const candidate = typeof realIp === 'string' ? realIp.trim() : '';
+  return isIP(candidate) === 0 ? request.ip : candidate;
+}
 
 function acceptedIdempotencyKey(header: string | string[] | undefined): string | null {
   if (typeof header !== 'string') return null;

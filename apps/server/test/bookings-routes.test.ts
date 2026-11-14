@@ -257,6 +257,41 @@ describe('abuse limits on POST /api/bookings', () => {
     expect(other.statusCode).toBe(400);
   });
 
+  it('keys the IP limit on X-Real-IP, so requests with spoofed X-Forwarded-For values share one bucket', async () => {
+    const app = appWith();
+    const send = (headers: Record<string, string>) =>
+      app.inject({ method: 'POST', url: '/api/bookings', headers, payload: {} });
+
+    for (let i = 0; i < 10; i += 1) {
+      const res = await send({ 'x-real-ip': '198.51.100.20', 'x-forwarded-for': `10.0.0.${i}` });
+      expect(res.statusCode).toBe(400);
+    }
+    const limited = await send({ 'x-real-ip': '198.51.100.20', 'x-forwarded-for': '10.0.1.99' });
+    const otherClient = await send({ 'x-real-ip': '198.51.100.21', 'x-forwarded-for': '10.0.1.99' });
+    await app.close();
+
+    expect(limited.statusCode).toBe(429);
+    expect(limited.json()).toMatchObject({ detail: 'Demasiados intentos. Espera unos minutos.' });
+    expect(otherClient.statusCode).toBe(400);
+  });
+
+  it('falls back to the request address when X-Real-IP is not an IP', async () => {
+    const app = appWith();
+    const send = (realIp: string) =>
+      app.inject({
+        method: 'POST',
+        url: '/api/bookings',
+        headers: { 'x-real-ip': realIp, 'x-forwarded-for': '203.0.113.9' },
+        payload: {},
+      });
+
+    for (let i = 0; i < 10; i += 1) expect((await send(`not-an-ip-${i}`)).statusCode).toBe(400);
+    const limited = await send('999.1.1.1');
+    await app.close();
+
+    expect(limited.statusCode).toBe(429);
+  });
+
   it('answers 429 to the 4th hold for one phone within 10 minutes; replaying a key does not count', async () => {
     const app = appWith(vi.fn<PushCharge>(() => Promise.reject(new RailUnavailableError('down'))));
     const keys = [randomUUID(), randomUUID(), randomUUID()];
