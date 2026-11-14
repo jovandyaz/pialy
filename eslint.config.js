@@ -1,14 +1,30 @@
+import { fileURLToPath } from 'node:url';
+import { includeIgnoreFile } from '@eslint/compat';
 import tseslint from 'typescript-eslint';
 import { importX } from 'eslint-plugin-import-x';
 import { createTypeScriptImportResolver } from 'eslint-import-resolver-typescript';
 
-const forbiddenDomainModules = [
-  { name: 'drizzle-orm', message: 'Domain must not depend on drizzle-orm.' },
-  { name: 'fastify', message: 'Domain must not depend on fastify.' },
+const gitignorePath = fileURLToPath(new URL('./.gitignore', import.meta.url));
+
+const infraPatterns = [
+  {
+    group: ['drizzle-orm', 'drizzle-orm/*', 'fastify', 'fastify/*', '@fastify/*'],
+    message: 'Domain must not depend on drizzle-orm or fastify.',
+  },
 ];
 
+const paymentsDomainImports = {
+  patterns: [
+    ...infraPatterns,
+    {
+      group: ['@pialy/connector-pey', '@pialy/connector-pey/*', '@pialy/server', '@pialy/server/*', '@pialy/web', '@pialy/web/*'],
+      message: 'payments/domain must not import connector-pey or apps.',
+    },
+  ],
+};
+
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/node_modules/**', '.superpowers/**', 'design/**'] },
+  includeIgnoreFile(gitignorePath),
   ...tseslint.configs.recommended,
   {
     files: ['**/*.ts', '**/*.tsx'],
@@ -38,7 +54,7 @@ export default tseslint.config(
           ],
         },
       ],
-      'no-restricted-imports': ['error', { paths: forbiddenDomainModules }],
+      'no-restricted-imports': ['error', paymentsDomainImports],
     },
   },
   {
@@ -58,7 +74,7 @@ export default tseslint.config(
           ],
         },
       ],
-      'no-restricted-imports': ['error', { paths: forbiddenDomainModules }],
+      'no-restricted-imports': ['error', { patterns: infraPatterns }],
     },
   },
 );
