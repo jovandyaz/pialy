@@ -12,6 +12,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -123,6 +124,7 @@ export const bookings = pgTable(
     ),
     index('bookings_phone_hash_idx').on(t.phoneHash),
     index('bookings_status_hold_expires_idx').on(t.status, t.holdExpiresAt),
+    uniqueIndex('bookings_one_holding_per_phone_idx').on(t.phoneHash).where(sql`${t.status} = 'holding'`),
   ],
 );
 

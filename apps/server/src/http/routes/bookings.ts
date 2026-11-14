@@ -1,3 +1,4 @@
+import rateLimit from '@fastify/rate-limit';
 import type { Clock, Money, RailConnector } from '@pialy/payments';
 import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
@@ -7,7 +8,11 @@ import {
   IdempotencyKeyReusedError,
   holdSlotAndCharge,
 } from '../../modules/booking/application/hold-slot.js';
-import { SlotTakenError } from '../../modules/booking/domain/booking.js';
+import {
+  ActiveHoldExistsError,
+  SlotTakenError,
+  TooManyHoldsForPhoneError,
+} from '../../modules/booking/domain/booking.js';
 import { InvalidPhoneError } from '../../modules/booking/domain/phone.js';
 import { InvalidDateError, SlotNotOfferedError } from '../../modules/booking/domain/slots.js';
 import {
@@ -38,7 +43,11 @@ const HTTP_BAD_REQUEST = 400;
 const HTTP_NOT_FOUND = 404;
 const HTTP_CONFLICT = 409;
 const HTTP_UNPROCESSABLE = 422;
+const HTTP_TOO_MANY_REQUESTS = 429;
 const HTTP_CREATED = 201;
+/** Per client IP (behind Railway's proxy, from X-Forwarded-For); in memory, so per instance. */
+const HOLDS_PER_IP = { max: 10, timeWindow: 10 * 60_000 } as const;
+const IP_LIMIT_DETAIL = 'Demasiados intentos. Espera unos minutos.';
 const DATE_FORMAT_DETAIL = 'Indica la fecha como AAAA-MM-DD';
 
 const slotsQuery = z.object({ date: z.string() });
@@ -77,6 +86,18 @@ const problems: readonly (readonly [new (...args: never[]) => Error, DomainProbl
     IdempotencyKeyInFlightError,
     { status: HTTP_CONFLICT, type: 'urn:pialy:problem:request-in-progress', detail: 'Solicitud en proceso' },
   ],
+  [
+    TooManyHoldsForPhoneError,
+    {
+      status: HTTP_TOO_MANY_REQUESTS,
+      type: 'urn:pialy:problem:phone-rate-limited',
+      detail: 'Demasiados intentos con este número',
+    },
+  ],
+  [
+    ActiveHoldExistsError,
+    { status: HTTP_CONFLICT, type: 'urn:pialy:problem:active-hold-exists', detail: 'Ya tienes un apartado en curso' },
+  ],
 ];
 
 /** Public booking API. The phone the customer types is never logged or stored, only its last 4 digits and hash. */
@@ -84,6 +105,10 @@ export const bookingRoutes: FastifyPluginAsync<BookingRoutesOptions> = async (ap
   const { db, connector, clock, deposit, phoneHashSalt } = options;
   const holds = createDrizzleHoldRepository(db);
   const activeBookings = createDrizzleActiveBookingsReader(db);
+  await app.register(rateLimit, {
+    global: false,
+    errorResponseBuilder: (_request, context) => Object.assign(new Error(IP_LIMIT_DETAIL), { statusCode: context.statusCode }),
+  });
 
   app.get('/api/slots', async (request, reply) => {
     const query = slotsQuery.safeParse(request.query);
@@ -99,7 +124,7 @@ export const bookingRoutes: FastifyPluginAsync<BookingRoutesOptions> = async (ap
     }
   });
 
-  app.post('/api/bookings', async (request, reply) => {
+  app.post('/api/bookings', { config: { rateLimit: HOLDS_PER_IP } }, async (request, reply) => {
     const key = acceptedIdempotencyKey(request.headers['idempotency-key']);
     if (key === null) return sendProblem(reply, HTTP_BAD_REQUEST, 'Envía un encabezado Idempotency-Key con un UUID');
     const body = holdBody.safeParse(request.body);

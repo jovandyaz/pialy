@@ -11,7 +11,7 @@ import {
   type PaymentIntent,
   type RailConnector,
 } from '@pialy/payments';
-import { HOLD_SECONDS } from '../domain/booking.js';
+import { HOLD_SECONDS, PHONE_HOLD_LIMIT } from '../domain/booking.js';
 import { normalizeMxPhone, phoneLast4 } from '../domain/phone.js';
 import { bookableSlot, type Slot } from '../domain/slots.js';
 import type { BookableBusiness } from './business.js';
@@ -29,6 +29,10 @@ export const IN_FLIGHT_TIMEOUT_MS = 60_000;
 
 const TOKEN_BYTES = 16;
 const MS_PER_SECOND = 1000;
+const MS_PER_MINUTE = 60_000;
+/** Phone numbers and CLABEs inside error text are cut down to nothing before logging. */
+const LONG_DIGIT_RUN = /\d{10,}/g;
+const REDACTED = '[redacted]';
 
 /** HTTP statuses a hold answers with once its key is finished. */
 export const HoldStatus = { Held: 201, PushFailed: 502 } as const;
@@ -79,6 +83,8 @@ export interface NewHold {
   readonly now: Date;
   /** A key locked before this instant belongs to a request that died. */
   readonly staleBefore: Date;
+  /** A new hold is refused once the phone started `maxHolds` holds since `since`. */
+  readonly phoneLimit: { readonly since: Date; readonly maxHolds: number };
   readonly business: BookableBusiness;
   readonly slot: Slot;
   readonly intent: PaymentIntent;
@@ -110,9 +116,11 @@ export type BeganHold =
 /** The atomic phases around the rail call (Brandur's idempotency keys); each method is one transaction. */
 export interface HoldRepository {
   /**
-   * Claims the key and, for a new key, creates intent `processing`, booking `holding` and attempt
-   * `awaiting` with recovery point `hold_created`. Throws {@link SlotTakenError},
-   * {@link IdempotencyKeyReusedError} or {@link IdempotencyKeyInFlightError}.
+   * Claims the key and, for a new key, enforces the phone limits and creates intent `processing`,
+   * booking `holding` and attempt `awaiting` with recovery point `hold_created`. A replay never
+   * counts against the limits. Throws {@link SlotTakenError}, {@link TooManyHoldsForPhoneError},
+   * {@link ActiveHoldExistsError}, {@link IdempotencyKeyReusedError} or
+   * {@link IdempotencyKeyInFlightError}.
    */
   begin(hold: NewHold): Promise<BeganHold>;
   /** Stores the rail's ids on the attempt and finishes the key with the staged response. */
@@ -213,6 +221,10 @@ function newHold(deps: HoldSlotDeps, idempotencyKey: string, now: Date, slot: Sl
     requestHash: customer.requestHash,
     now,
     staleBefore: new Date(now.getTime() - IN_FLIGHT_TIMEOUT_MS),
+    phoneLimit: {
+      since: new Date(now.getTime() - PHONE_HOLD_LIMIT.windowMinutes * MS_PER_MINUTE),
+      maxHolds: PHONE_HOLD_LIMIT.maxHolds,
+    },
     business: deps.business,
     slot,
     intent,
@@ -249,12 +261,25 @@ async function sendPush(deps: HoldSlotDeps, hold: HoldRef, bookingNumber: number
 }
 
 function logPushFailure(log: HoldLogger, hold: HoldRef, error: unknown): void {
-  const context = { err: error, bookingId: hold.bookingId, attemptId: hold.attemptId };
-  if (error instanceof RailRejectedError || error instanceof RailUnavailableError) {
-    log.warn(context, 'codi push failed');
+  const ids = { bookingId: hold.bookingId, attemptId: hold.attemptId };
+  if (error instanceof RailRejectedError) {
+    // The provider's message can echo the phone we sent, so only its structured fields are logged.
+    const { name, status, providerCode, requestId } = error;
+    log.warn({ ...ids, rail: { name, status, providerCode, requestId } }, 'codi push failed');
+  } else if (error instanceof RailUnavailableError) {
+    log.warn({ ...ids, rail: { name: error.name, status: error.status } }, 'codi push failed');
   } else {
-    log.error(context, 'codi push failed unexpectedly');
+    log.error({ ...ids, failure: scrubbed(error) }, 'codi push failed unexpectedly');
   }
+}
+
+function scrubbed(error: unknown): { name: string; message?: string; stack?: string } {
+  if (!(error instanceof Error)) return { name: typeof error };
+  return {
+    name: error.name,
+    message: error.message.replace(LONG_DIGIT_RUN, REDACTED),
+    ...(error.stack === undefined ? {} : { stack: error.stack.replace(LONG_DIGIT_RUN, REDACTED) }),
+  };
 }
 
 function fingerprint(slot: Slot, phoneHash: string, customerName: string | null): string {

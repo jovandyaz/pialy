@@ -28,7 +28,7 @@ function booking(resourceId: string, businessId: string, start: string, end: str
     during: { start: new Date(start), end: new Date(end) },
     status,
     phoneLast4: '5678',
-    phoneHash: 'hash',
+    phoneHash: `hash-${counter}`,
   };
 }
 
@@ -93,6 +93,26 @@ describe('bookings exclusion constraint', () => {
     expect(row?.during.start.toISOString()).toBe('2026-11-20T15:00:00.000Z');
     expect(row?.during.end.toISOString()).toBe('2026-11-20T15:45:00.000Z');
     expect(row?.number).toBe(1);
+  });
+});
+
+describe('one holding booking per phone', () => {
+  it('rejects a second holding booking for the same phone hash with 23505', async () => {
+    const res = await fixture();
+    const first = booking(res.id, res.businessId, '2026-11-20T15:00:00Z', '2026-11-20T15:45:00Z');
+    await db.insert(bookings).values({ ...first, phoneHash: 'same-phone' });
+    const second = booking(res.id, res.businessId, '2026-11-20T17:00:00Z', '2026-11-20T17:45:00Z');
+
+    expect(await pgCode(db.insert(bookings).values({ ...second, phoneHash: 'same-phone' }))).toBe('23505');
+  });
+
+  it('allows a new hold once the phone has no holding booking', async () => {
+    const res = await fixture();
+    for (const status of ['expired', 'confirmed', 'canceled', 'holding']) {
+      const row = booking(res.id, res.businessId, `2026-11-2${counter % 10}T15:00:00Z`, `2026-11-2${counter % 10}T15:45:00Z`, status);
+      await db.insert(bookings).values({ ...row, phoneHash: 'same-phone' });
+    }
+    expect(await db.select().from(bookings)).toHaveLength(4);
   });
 });
 

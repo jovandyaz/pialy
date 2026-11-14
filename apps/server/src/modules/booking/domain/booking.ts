@@ -12,12 +12,33 @@ export type BookingStatus = (typeof BookingStatus)[keyof typeof BookingStatus];
 /** How long a slot is held while the customer approves the CoDi push; pey's minimum expiration. */
 export const HOLD_SECONDS = 360;
 
+/** Each hold sends a real CoDi push to the number typed, so one phone gets few of them. */
+export const PHONE_HOLD_LIMIT = { maxHolds: 3, windowMinutes: 10 } as const;
+
 /** Another active booking already covers the slot. */
 export class SlotTakenError extends Error {
   override readonly name = 'SlotTakenError';
 
   constructor() {
     super('the slot is already held or booked');
+  }
+}
+
+/** The phone already started {@link PHONE_HOLD_LIMIT} holds inside the window. */
+export class TooManyHoldsForPhoneError extends Error {
+  override readonly name = 'TooManyHoldsForPhoneError';
+
+  constructor() {
+    super('too many holds for this phone in the current window');
+  }
+}
+
+/** The phone already has a booking in `holding`; it must be paid or expire first. */
+export class ActiveHoldExistsError extends Error {
+  override readonly name = 'ActiveHoldExistsError';
+
+  constructor() {
+    super('this phone already has a hold in progress');
   }
 }
 

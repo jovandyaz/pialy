@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "bookings_one_holding_per_phone_idx" ON "bookings" USING btree ("phone_hash") WHERE "bookings"."status" = 'holding';

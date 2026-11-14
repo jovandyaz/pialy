@@ -33,13 +33,21 @@ import {
   type HoldSlotDeps,
   type HoldSlotInput,
 } from '../src/modules/booking/application/hold-slot.js';
-import { SlotTakenError } from '../src/modules/booking/domain/booking.js';
+import {
+  ActiveHoldExistsError,
+  SlotTakenError,
+  TooManyHoldsForPhoneError,
+} from '../src/modules/booking/domain/booking.js';
 import { cleanDb, openTestDb } from './support.js';
 
 const handle = openTestDb();
 const { db } = handle;
 afterAll(() => handle.close());
-beforeEach(() => cleanDb(handle));
+beforeEach(async () => {
+  await cleanDb(handle);
+  log.warn.mockClear();
+  log.error.mockClear();
+});
 
 const NOW = new Date('2026-11-14T18:00:00.000Z');
 const HOLD_EXPIRES_AT = '2026-11-14T18:06:00.000Z';
@@ -80,6 +88,10 @@ async function deps(push: PushCharge, overrides: Partial<HoldSlotDeps> = {}): Pr
     log,
     ...overrides,
   };
+}
+
+function phoneFor(n: number): string {
+  return String(5_500_000_000 + n);
 }
 
 function input(overrides: Partial<HoldSlotInput> = {}): HoldSlotInput {
@@ -258,8 +270,8 @@ describe('holdSlotAndCharge', () => {
       const keys = [randomUUID(), randomUUID()] as const;
       const results = await releasedTogether(keys, () =>
         Promise.allSettled([
-          holdSlotAndCharge(d, input({ slotStart, phone: '55 1111 2222', idempotencyKey: keys[0] })),
-          holdSlotAndCharge(d, input({ slotStart, phone: '55 3333 4444', idempotencyKey: keys[1] })),
+          holdSlotAndCharge(d, input({ slotStart, phone: phoneFor(2 * round), idempotencyKey: keys[0] })),
+          holdSlotAndCharge(d, input({ slotStart, phone: phoneFor(2 * round + 1), idempotencyKey: keys[1] })),
         ]),
       );
 
@@ -326,15 +338,78 @@ describe('holdSlotAndCharge', () => {
   });
 
   it('never leaves the key in flight when the connector fails unexpectedly', async () => {
-    const d = await deps(vi.fn<PushCharge>(() => Promise.reject(new TypeError('boom'))));
+    const d = await deps(vi.fn<PushCharge>(() => Promise.reject(new TypeError(`boom for ${PHONE10}`))));
     const request = input();
 
     const response = await holdSlotAndCharge(d, request);
 
     expect(response.status).toBe(502);
-    expect(log.error).toHaveBeenCalled();
+    expect(log.error).toHaveBeenCalledWith(
+      expect.objectContaining({ failure: expect.objectContaining({ name: 'TypeError', message: 'boom for [redacted]' }) }),
+      'codi push failed unexpectedly',
+    );
+    expect(JSON.stringify(log.error.mock.calls)).not.toContain(PHONE10);
     expect((await onlyBooking()).status).toBe('expired');
     expect(await holdSlotAndCharge(d, request)).toEqual(response);
+  });
+
+  it('logs a rail rejection by name, status and code only, never the provider message that may echo the phone', async () => {
+    const providerMessage = `phoneNumber ${PHONE10} is not enrolled in CoDi`;
+    const rejection = new RailRejectedError(`pey rejected POST /codi/pn (400): ${providerMessage}`, {
+      status: 400,
+      providerMessage,
+      providerCode: 'INVALID_PARAMETER',
+      requestId: 'req_123',
+    });
+    const d = await deps(vi.fn<PushCharge>(() => Promise.reject(rejection)));
+
+    await holdSlotAndCharge(d, input());
+
+    const logged = JSON.stringify(log.warn.mock.calls);
+    expect(logged).not.toContain(PHONE10);
+    expect(logged).not.toContain('not enrolled');
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.objectContaining({ rail: { name: 'RailRejectedError', status: 400, providerCode: 'INVALID_PARAMETER', requestId: 'req_123' } }),
+      'codi push failed',
+    );
+  });
+
+  it('limits a phone to 3 holds in 10 minutes; replays do not count and the window slides', async () => {
+    const push = vi.fn<PushCharge>(() => Promise.reject(new RailUnavailableError('down')));
+    const d = await deps(push);
+    const keys = [randomUUID(), randomUUID(), randomUUID()];
+    const responses = [];
+    for (const idempotencyKey of keys) responses.push(await holdSlotAndCharge(d, input({ idempotencyKey })));
+
+    expect(await holdSlotAndCharge(d, input({ idempotencyKey: keys[2]! }))).toEqual(responses[2]);
+    await expect(holdSlotAndCharge(d, input())).rejects.toThrow(TooManyHoldsForPhoneError);
+    expect(await holdSlotAndCharge(d, input({ phone: '33 1234 5678' }))).toMatchObject({ status: 502 });
+    expect(push).toHaveBeenCalledTimes(4);
+
+    const later = { now: () => new Date(NOW.getTime() + 10 * MINUTE_MS + 1000) };
+    expect(await holdSlotAndCharge({ ...d, clock: later }, input())).toMatchObject({ status: 502 });
+  });
+
+  it('allows one holding booking per phone: concurrent holds of two slots give one hold and one ActiveHoldExistsError', async () => {
+    const d = await deps(okPush());
+    const keys = [randomUUID(), randomUUID()] as const;
+    const second = new Date(SLOT.getTime() + 2 * d.business.slotMinutes * MINUTE_MS);
+
+    const results = await releasedTogether(keys, () =>
+      Promise.allSettled([
+        holdSlotAndCharge(d, input({ idempotencyKey: keys[0] })),
+        holdSlotAndCharge(d, input({ slotStart: second, idempotencyKey: keys[1] })),
+      ]),
+    );
+
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(rejected.map((r) => r.reason)).toEqual([expect.any(ActiveHoldExistsError)]);
+    const holding = await onlyBooking();
+
+    await db.update(bookings).set({ status: 'expired' }).where(eq(bookings.id, holding.id));
+    const third = new Date(SLOT.getTime() + 4 * d.business.slotMinutes * MINUTE_MS);
+    expect(await holdSlotAndCharge(d, input({ slotStart: third }))).toMatchObject({ status: 201 });
   });
 
   it('answers 201 when the push call failed but its payment already confirmed the booking', async () => {

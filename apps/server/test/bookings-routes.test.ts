@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import { Writable } from 'node:stream';
-import { RailUnavailableError, applyProviderPayment, money, type RailConnector } from '@pialy/payments';
+import {
+  RailRejectedError,
+  RailUnavailableError,
+  applyProviderPayment,
+  money,
+  type RailConnector,
+} from '@pialy/payments';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildApp, type AppDeps } from '../src/app.js';
@@ -56,7 +62,7 @@ describe('GET /api/slots', () => {
   it('lists the day with free, held and taken slots', async () => {
     const app = appWith();
     await post(app, { slotStart: SLOT, phone: PHONE10 });
-    await post(app, { slotStart: '2026-11-15T15:45:00.000Z', phone: PHONE10 });
+    await post(app, { slotStart: '2026-11-15T15:45:00.000Z', phone: '33 1234 5678' });
     const [, second] = await db.select().from(bookings).orderBy(bookings.number);
     await db.update(bookings).set({ status: 'confirmed' }).where(eq(bookings.id, second!.id));
 
@@ -230,6 +236,88 @@ describe('POST /api/bookings', () => {
     expect(out).toContain('codi push failed');
     expect(out).not.toContain(PHONE10);
     expect(out).not.toContain('1234 5678');
+  });
+});
+
+describe('abuse limits on POST /api/bookings', () => {
+  it('answers 429 to the 11th request from one IP in 10 minutes, and not to another IP', async () => {
+    const app = appWith();
+    const fromIp = (ip: string) =>
+      app.inject({ method: 'POST', url: '/api/bookings', headers: { 'x-forwarded-for': ip }, payload: {} });
+
+    for (let i = 0; i < 10; i += 1) expect((await fromIp('203.0.113.7')).statusCode).toBe(400);
+    const limited = await fromIp('203.0.113.7');
+    const other = await fromIp('203.0.113.8');
+    await app.close();
+
+    expect(limited.statusCode).toBe(429);
+    expect(limited.headers['content-type']).toContain(PROBLEM);
+    expect(limited.headers['retry-after']).toBeDefined();
+    expect(limited.json()).toMatchObject({ status: 429, detail: 'Demasiados intentos. Espera unos minutos.' });
+    expect(other.statusCode).toBe(400);
+  });
+
+  it('answers 429 to the 4th hold for one phone within 10 minutes; replaying a key does not count', async () => {
+    const app = appWith(vi.fn<PushCharge>(() => Promise.reject(new RailUnavailableError('down'))));
+    const keys = [randomUUID(), randomUUID(), randomUUID()];
+    for (const key of keys) expect((await post(app, { slotStart: SLOT, phone: PHONE10 }, key)).statusCode).toBe(502);
+
+    const replay = await post(app, { slotStart: SLOT, phone: PHONE10 }, keys[2]!);
+    const fourth = await post(app, { slotStart: SLOT, phone: '55-1234-5678' });
+    await app.close();
+
+    expect(replay.statusCode).toBe(502);
+    expect(fourth.statusCode).toBe(429);
+    expect(fourth.headers['content-type']).toContain(PROBLEM);
+    expect(fourth.json()).toMatchObject({
+      type: 'urn:pialy:problem:phone-rate-limited',
+      detail: 'Demasiados intentos con este número',
+    });
+  });
+
+  it('answers 409 to a second concurrent hold for the same phone, then allows one after the first expires', async () => {
+    const app = appWith();
+
+    const responses = await Promise.all([
+      post(app, { slotStart: SLOT, phone: PHONE10 }),
+      post(app, { slotStart: '2026-11-15T17:15:00.000Z', phone: PHONE10 }),
+    ]);
+    const statuses = responses.map((r) => r.statusCode).sort();
+    const conflict = responses.find((r) => r.statusCode === 409);
+    await db.update(bookings).set({ status: 'expired' });
+    const after = await post(app, { slotStart: '2026-11-15T18:00:00.000Z', phone: PHONE10 });
+    await app.close();
+
+    expect(statuses).toEqual([201, 409]);
+    expect(conflict?.json()).toMatchObject({
+      type: 'urn:pialy:problem:active-hold-exists',
+      detail: 'Ya tienes un apartado en curso',
+    });
+    expect(after.statusCode).toBe(201);
+  });
+
+  it('never logs the phone when pey rejects the push with a message that echoes it', async () => {
+    const logs = captureLogs();
+    const providerMessage = `phoneNumber ${PHONE10} is not enrolled in CoDi`;
+    const push = vi.fn<PushCharge>(() =>
+      Promise.reject(
+        new RailRejectedError(`pey rejected POST /codi/pn (400): ${providerMessage}`, {
+          status: 400,
+          providerMessage,
+          providerCode: 'INVALID_PARAMETER',
+        }),
+      ),
+    );
+    const app = appWith(push, { logStream: logs.stream });
+
+    const res = await post(app, { slotStart: SLOT, phone: PHONE10 });
+    await app.close();
+
+    expect(res.statusCode).toBe(502);
+    const out = logs.text();
+    expect(out).toContain('INVALID_PARAMETER');
+    expect(out).not.toContain(PHONE10);
+    expect(out).not.toContain('not enrolled');
   });
 });
 

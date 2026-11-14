@@ -1,5 +1,5 @@
 import { AttemptStatus, IntentStatus, failAttempt, type AttemptMatch, type PaymentRepository } from '@pialy/payments';
-import { and, asc, eq, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, eq, gt, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import {
   HOLD_SCOPE,
@@ -13,7 +13,12 @@ import {
   type NewHold,
 } from '../../modules/booking/application/hold-slot.js';
 import type { BookingOfIntent, BookingPaymentStore } from '../../modules/booking/application/on-payment-event.js';
-import { BookingStatus, SlotTakenError } from '../../modules/booking/domain/booking.js';
+import {
+  ActiveHoldExistsError,
+  BookingStatus,
+  SlotTakenError,
+  TooManyHoldsForPhoneError,
+} from '../../modules/booking/domain/booking.js';
 import type { Db, DbTx } from '../db/client.js';
 import { SqlState, sanitized, violates, withoutQueryParameters } from '../db/errors.js';
 import { bookings, flags, paymentAttempts, paymentIntents } from '../db/schema.js';
@@ -22,6 +27,7 @@ import { BOARD_TOPIC, bookingTopic, enqueueOutbox, type OutboxMessage } from '..
 import { createDrizzlePaymentRepository, oneOf } from '../payments/drizzle-payment-repository.js';
 
 const NO_OVERLAP_CONSTRAINT = 'bookings_no_overlap';
+const ONE_HOLDING_PER_PHONE_INDEX = 'bookings_one_holding_per_phone_idx';
 const HOLD_CREATED = 'hold_created';
 const BOOKING_UPDATED = 'booking.updated';
 /** Fetching two rows is enough to tell a unique match from an ambiguous one. */
@@ -36,8 +42,8 @@ const pushFailedSchema = z.object({
 });
 
 /**
- * Lock order everywhere: idempotency key, then payment intent, then booking, then the resource's
- * slot lock. Webhooks lock the intent first and never a key, so the two paths cannot deadlock.
+ * Lock order everywhere: idempotency key, phone lock, payment intent, booking, then the resource's
+ * slot lock. Webhooks lock the intent first and never a key or a phone, so the paths cannot deadlock.
  */
 export function createDrizzleHoldRepository(db: Db): HoldRepository {
   return {
@@ -46,6 +52,7 @@ export function createDrizzleHoldRepository(db: Db): HoldRepository {
         return await db.transaction((tx) => begin(tx, hold));
       } catch (error) {
         if (violates(error, SqlState.ExclusionViolation, NO_OVERLAP_CONSTRAINT)) throw new SlotTakenError();
+        if (violates(error, SqlState.UniqueViolation, ONE_HOLDING_PER_PHONE_INDEX)) throw new ActiveHoldExistsError();
         throw withoutQueryParameters(error);
       }
     },
@@ -177,6 +184,10 @@ async function begin(tx: DbTx, hold: NewHold): Promise<BeganHold> {
 
 async function createHold(tx: DbTx, ref: KeyRef, hold: NewHold): Promise<BeganHold> {
   const { intent, attempt, booking, slot, business } = hold;
+  await lockPhone(tx, booking.phoneHash);
+  if ((await holdsOfPhoneSince(tx, booking.phoneHash, hold.phoneLimit.since)) >= hold.phoneLimit.maxHolds) {
+    throw new TooManyHoldsForPhoneError();
+  }
   await lockSlotsOfResource(tx, business.resourceId);
   await tx.insert(paymentIntents).values({
     id: intent.id,
@@ -200,6 +211,7 @@ async function createHold(tx: DbTx, ref: KeyRef, hold: NewHold): Promise<BeganHo
       phoneLast4: booking.phoneLast4,
       phoneHash: booking.phoneHash,
       holdExpiresAt: booking.holdExpiresAt,
+      createdAt: hold.now,
     })
     .returning({ number: bookings.number, token: bookings.token, status: bookings.status, late: bookings.late });
   if (created === undefined) throw new Error('booking insert returned no row');
@@ -260,6 +272,19 @@ function toHoldResponse(stored: StoredResponse): HoldResponse {
     return { status: HoldStatus.PushFailed, body: pushFailedSchema.parse(stored.body) };
   }
   throw new Error(`unexpected stored hold response status ${stored.status}`);
+}
+
+/** Serializes new holds of one phone so its count and its single `holding` booking stay exact. */
+async function lockPhone(tx: DbTx, phoneHash: string): Promise<void> {
+  await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended('booking-phone:' || ${phoneHash}, 0))`);
+}
+
+async function holdsOfPhoneSince(tx: DbTx, phoneHash: string, since: Date): Promise<number> {
+  const [row] = await tx
+    .select({ holds: count() })
+    .from(bookings)
+    .where(and(eq(bookings.phoneHash, phoneHash), gt(bookings.createdAt, since)));
+  return row?.holds ?? 0;
 }
 
 /**

@@ -16,7 +16,7 @@ export class DatabaseQueryError extends Error {
   }
 }
 
-export const SqlState = { ExclusionViolation: '23P01' } as const;
+export const SqlState = { UniqueViolation: '23505', ExclusionViolation: '23P01' } as const;
 
 export function withoutQueryParameters(error: unknown): unknown {
   return error instanceof DrizzleQueryError ? new DatabaseQueryError(error.query, error.cause) : error;
