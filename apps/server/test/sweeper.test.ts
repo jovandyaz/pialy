@@ -378,11 +378,20 @@ describe('runSweep: late-payment watch', () => {
     ]);
   });
 
-  it('stops watching an attempt 30 minutes after it expired', async () => {
+  it('still watches 35 minutes after expiry to cover an expiry delayed by the rail grace', async () => {
     await expiredHold();
     const rail = railReturning(paid());
 
-    await runSweep(deps(rail, new Date(EXPIRES_AT.getTime() + 30 * MINUTE_MS)), { lateWatch: true });
+    await runSweep(deps(rail, new Date(EXPIRES_AT.getTime() + 35 * MINUTE_MS)), { lateWatch: true });
+
+    expect(rail.findPayments).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops watching an attempt 40 minutes after it expired', async () => {
+    await expiredHold();
+    const rail = railReturning(paid());
+
+    await runSweep(deps(rail, new Date(EXPIRES_AT.getTime() + 40 * MINUTE_MS)), { lateWatch: true });
 
     expect(rail.findPayments).not.toHaveBeenCalled();
   });

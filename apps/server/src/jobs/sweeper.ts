@@ -1,5 +1,6 @@
 import {
   AttemptStatus,
+  RAIL_FAILURE_GRACE_MS,
   ReconcileOutcome,
   reconcileAttempt,
   type Clock,
@@ -110,13 +111,16 @@ function overdueAttempts(db: Db, now: Date): Promise<string[]> {
   );
 }
 
-/** Attempts the rail never got an id for cannot be looked up there. */
+/**
+ * Attempts the rail never got an id for cannot be looked up there. The window adds the rail
+ * failure grace so an attempt expired late still gets the full watch after it expired.
+ */
 function recentlyExpiredAttempts(db: Db, now: Date): Promise<string[]> {
   return attemptIds(
     db,
     and(
       eq(paymentAttempts.status, AttemptStatus.Expired),
-      gt(paymentAttempts.expiresAt, new Date(now.getTime() - LATE_WATCH_WINDOW_MS)),
+      gt(paymentAttempts.expiresAt, new Date(now.getTime() - LATE_WATCH_WINDOW_MS - RAIL_FAILURE_GRACE_MS)),
       or(isNotNull(paymentAttempts.providerTxId), isNotNull(paymentAttempts.providerQrId)),
     ),
   );
