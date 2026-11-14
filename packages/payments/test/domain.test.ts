@@ -5,6 +5,7 @@ import {
   IntentNotPayableError,
   InvalidMoneyError,
   expireAttempt,
+  failAttempt,
   money,
   recordPayment,
   startAttempt,
@@ -307,6 +308,43 @@ describe('expireAttempt', () => {
     expect(() =>
       expireAttempt(anIntent(), anAttempt({ intentId: 'pi_other' }), SWEPT_AT, false),
     ).toThrow(AttemptIntentMismatchError);
+  });
+});
+
+describe('failAttempt', () => {
+  it('fails an awaiting attempt and expires the intent when no other attempt is awaiting', () => {
+    const intent = anIntent({ status: 'processing' });
+    const attempt = anAttempt({ status: 'awaiting', provider: { transactionId: 'tx_1' } });
+
+    const result = failAttempt(intent, attempt, false);
+
+    expect(result.intent).toEqual({ ...intent, status: 'expired' });
+    expect(result.attempt).toEqual({ ...attempt, status: 'failed' });
+  });
+
+  it('keeps the intent processing when another attempt is still awaiting', () => {
+    const intent = anIntent({ status: 'processing' });
+
+    const result = failAttempt(intent, anAttempt(), true);
+
+    expect(result.intent).toEqual(intent);
+    expect(result.attempt.status).toBe('failed');
+  });
+
+  it.each<AttemptStatus>(['succeeded', 'expired', 'failed'])(
+    'is a no-op for an attempt that is already %s',
+    (status) => {
+      const intent = anIntent({ status: 'succeeded', succeededAt: PAID_AT });
+      const attempt = anAttempt({ status });
+
+      expect(failAttempt(intent, attempt, false)).toEqual({ intent, attempt });
+    },
+  );
+
+  it('throws AttemptIntentMismatchError when the attempt belongs to another intent', () => {
+    expect(() => failAttempt(anIntent(), anAttempt({ intentId: 'pi_other' }), false)).toThrow(
+      AttemptIntentMismatchError,
+    );
   });
 });
 

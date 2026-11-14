@@ -128,6 +128,25 @@ export function expireAttempt(
   };
 }
 
+/**
+ * Fails an awaiting attempt whose rail call did not produce a charge we can rely on. The attempt
+ * keeps its id so a payment that still arrives can be matched to it and handled as late. The
+ * intent expires only if no other attempt is awaiting.
+ */
+export function failAttempt(
+  intent: PaymentIntent,
+  attempt: PaymentAttempt,
+  hasOtherAwaiting: boolean,
+): Omit<AttemptTransition, 'events'> {
+  assertAttemptOf(intent, attempt);
+  if (attempt.status !== AttemptStatus.Awaiting) return { intent, attempt };
+  const intentExpires = !hasOtherAwaiting && isOpen(intent.status);
+  return {
+    intent: intentExpires ? { ...intent, status: IntentStatus.Expired } : intent,
+    attempt: { ...attempt, status: AttemptStatus.Failed },
+  };
+}
+
 function isOpen(status: IntentStatus): boolean {
   return status === IntentStatus.RequiresPayment || status === IntentStatus.Processing;
 }

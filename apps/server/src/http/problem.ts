@@ -16,8 +16,8 @@ export function problem(status: number, detail?: string, type = 'about:blank'): 
   return detail === undefined ? { type, title, status } : { type, title, status, detail };
 }
 
-export function sendProblem(reply: FastifyReply, status: number, detail?: string): FastifyReply {
-  return reply.status(status).header('content-type', PROBLEM_CONTENT_TYPE).send(problem(status, detail));
+export function sendProblem(reply: FastifyReply, status: number, detail?: string, type?: string): FastifyReply {
+  return reply.status(status).header('content-type', PROBLEM_CONTENT_TYPE).send(problem(status, detail, type));
 }
 
 export function problemErrorHandler(error: FastifyError, request: FastifyRequest, reply: FastifyReply): FastifyReply {

@@ -4,9 +4,9 @@ import { loadEnv } from './config/env.js';
 import { createDb } from './infrastructure/db/client.js';
 
 const env = loadEnv();
-const { PEY_API_KEY, PEY_BASE_URL, PEY_WEBHOOK_SECRET } = env;
-if (!PEY_API_KEY || !PEY_BASE_URL || !PEY_WEBHOOK_SECRET) {
-  console.error('PEY_API_KEY, PEY_BASE_URL and PEY_WEBHOOK_SECRET are required to start the server');
+const { PEY_API_KEY, PEY_BASE_URL, PEY_WEBHOOK_SECRET, PHONE_HASH_SALT } = env;
+if (!PEY_API_KEY || !PEY_BASE_URL || !PEY_WEBHOOK_SECRET || !PHONE_HASH_SALT) {
+  console.error('PEY_API_KEY, PEY_BASE_URL, PEY_WEBHOOK_SECRET and PHONE_HASH_SALT are required to start the server');
   process.exit(1);
 }
 

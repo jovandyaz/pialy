@@ -34,7 +34,7 @@ export function testDeps(handle: DbHandle, overrides: Partial<AppDeps> = {}): Ap
     db: handle.db,
     connector: fakeConnector,
     clock: { now: () => new Date('2026-11-14T12:00:00Z') },
-    env: loadEnv({ NODE_ENV: 'test', DATABASE_URL: TEST_DATABASE_URL }),
+    env: loadEnv({ NODE_ENV: 'test', DATABASE_URL: TEST_DATABASE_URL, PHONE_HASH_SALT: 'test-phone-hash-salt' }),
     ...overrides,
   };
 }

@@ -149,7 +149,8 @@ function toMoney(amountMinor: number, currency: string): Money {
   return money(amountMinor);
 }
 
-function oneOf<T extends string>(allowed: Readonly<Record<string, T>>, value: string, what: string): T {
+/** Narrows a text column to a closed set of values, failing loudly on anything else. */
+export function oneOf<T extends string>(allowed: Readonly<Record<string, T>>, value: string, what: string): T {
   const match = Object.values(allowed).find((candidate) => candidate === value);
   if (match === undefined) throw new Error(`unknown ${what} ${value}`);
   return match;
