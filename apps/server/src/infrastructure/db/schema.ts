@@ -80,7 +80,7 @@ export const paymentIntents = pgTable(
       'payment_intents_status_check',
       sql`${t.status} IN ('requires_payment','processing','succeeded','expired','canceled')`,
     ),
-    check('payment_intents_amount_check', sql`${t.amountMinor} >= 0`),
+    check('payment_intents_amount_check', sql`${t.amountMinor} > 0`),
   ],
 );
 
@@ -116,6 +116,10 @@ export const bookings = pgTable(
     check(
       'bookings_status_check',
       sql`${t.status} IN ('holding','confirmed','checked_in','expired','canceled')`,
+    ),
+    check(
+      'bookings_during_check',
+      sql`NOT isempty(${t.during}) AND lower(${t.during}) = ${t.slotStart}`,
     ),
     index('bookings_phone_hash_idx').on(t.phoneHash),
     index('bookings_status_hold_expires_idx').on(t.status, t.holdExpiresAt),

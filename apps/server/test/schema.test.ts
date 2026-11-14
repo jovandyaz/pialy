@@ -1,6 +1,6 @@
 import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
-import { bookings, business, flags, paymentEvents, resources, webhookInbox } from '../src/infrastructure/db/schema.js';
+import { bookings, business, flags, paymentEvents, paymentIntents, resources, webhookInbox } from '../src/infrastructure/db/schema.js';
 import { DEMO_BUSINESS_NAME, seedDemo } from '../src/infrastructure/db/seed.js';
 import { cleanDb, openTestDb } from './support.js';
 
@@ -119,6 +119,29 @@ describe('constraints', () => {
     const hook = { webhookId: 'wh1', eventType: 'payment.received' };
     await db.insert(webhookInbox).values(hook);
     expect(await pgCode(db.insert(webhookInbox).values(hook))).toBe('23505');
+  });
+
+  it('rejects zero-amount payment intents but accepts positive ones', async () => {
+    const intent = { reference: 'ref-0', amountMinor: 0 };
+    expect(await pgCode(db.insert(paymentIntents).values(intent))).toBe('23514');
+    await db.insert(paymentIntents).values({ reference: 'ref-1', amountMinor: 1 });
+  });
+
+  it('rejects empty booking ranges', async () => {
+    const res = await fixture();
+    const code = await pgCode(
+      db.insert(bookings).values(booking(res.id, res.businessId, '2026-11-20T15:00:00Z', '2026-11-20T15:00:00Z')),
+    );
+    expect(code).toBe('23514');
+  });
+
+  it('rejects a range whose lower bound differs from slot_start', async () => {
+    const res = await fixture();
+    const row = booking(res.id, res.businessId, '2026-11-20T15:00:00Z', '2026-11-20T15:45:00Z');
+    const code = await pgCode(
+      db.insert(bookings).values({ ...row, slotStart: new Date('2026-11-20T15:15:00Z') }),
+    );
+    expect(code).toBe('23514');
   });
 
   it('caps booking numbers at 7 digits', async () => {

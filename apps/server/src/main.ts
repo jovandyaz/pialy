@@ -23,8 +23,14 @@ const app = buildApp({
 });
 
 const shutdown = async (): Promise<void> => {
-  await app.close();
-  await close();
+  try {
+    await app.close();
+    await close();
+    process.exit(0);
+  } catch (err) {
+    app.log.error({ err }, 'graceful shutdown failed');
+    process.exit(1);
+  }
 };
 process.once('SIGTERM', () => void shutdown());
 process.once('SIGINT', () => void shutdown());

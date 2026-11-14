@@ -87,15 +87,31 @@ describe('log redaction', () => {
     const app = buildApp(testDeps(handle, { logStream }));
     app.log.info(
       {
-        req: { headers: { authorization: 'Bearer SECRETTOKEN', 'webhook-signature': 'v1,SIGVALUE' } },
+        // `headers` has no serializer, unlike Fastify's `req`, so redaction is what hides these.
+        headers: { authorization: 'Bearer SECRETTOKEN', 'webhook-signature': 'v1,SIGVALUE' },
+        phone: '5500000001',
+        phoneNumber: '5500000002',
+        PEY_API_KEY: 'TOPAPIKEY',
+        PEY_WEBHOOK_SECRET: 'TOPSECRET',
         customer: { phone: '5512345678', phoneNumber: '5587654321' },
-        cfg: { PEY_API_KEY: 'APIKEYVALUE' },
+        cfg: { PEY_API_KEY: 'APIKEYVALUE', PEY_WEBHOOK_SECRET: 'NESTEDSECRET' },
       },
       'probe',
     );
     await app.close();
     const out = chunks.join('');
-    for (const leaked of ['SECRETTOKEN', 'SIGVALUE', '5512345678', '5587654321', 'APIKEYVALUE']) {
+    for (const leaked of [
+      'SECRETTOKEN',
+      'SIGVALUE',
+      '5500000001',
+      '5500000002',
+      'TOPAPIKEY',
+      'TOPSECRET',
+      '5512345678',
+      '5587654321',
+      'APIKEYVALUE',
+      'NESTEDSECRET',
+    ]) {
       expect(out).not.toContain(leaked);
     }
     expect(out).toContain('[redacted]');

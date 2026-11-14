@@ -18,13 +18,21 @@ export interface AppDeps {
 export const LOG_REDACT_PATHS = [
   'req.headers.authorization',
   'req.headers["webhook-signature"]',
+  'headers.authorization',
+  'headers["webhook-signature"]',
+  'phone',
+  'phoneNumber',
   '*.phone',
   '*.phoneNumber',
+  'PEY_API_KEY',
+  'PEY_WEBHOOK_SECRET',
   '*.PEY_API_KEY',
+  '*.PEY_WEBHOOK_SECRET',
 ] as const;
 
 export function buildApp(deps: AppDeps): FastifyInstance {
   const app = Fastify({
+    trustProxy: true, // behind Railway's proxy: real client IP for rate limits
     logger:
       deps.env.NODE_ENV === 'test' && deps.logStream === undefined
         ? false

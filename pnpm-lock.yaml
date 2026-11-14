@@ -47,6 +47,9 @@ importers:
       drizzle-orm:
         specifier: 0.45.4
         version: 0.45.4(postgres@3.4.9)
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       fastify:
         specifier: 5.12.7
         version: 5.12.7
@@ -63,9 +66,6 @@ importers:
       drizzle-kit:
         specifier: 0.31.11
         version: 0.31.11
-      esbuild:
-        specifier: 0.28.2
-        version: 0.28.2
 
   apps/web: {}
 
