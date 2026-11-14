@@ -6,19 +6,16 @@ import { createTypeScriptImportResolver } from 'eslint-import-resolver-typescrip
 
 const gitignorePath = fileURLToPath(new URL('./.gitignore', import.meta.url));
 
-const infraPatterns = [
-  {
-    group: ['drizzle-orm', 'drizzle-orm/*', 'fastify', 'fastify/*', '@fastify/*'],
-    message: 'Domain must not depend on drizzle-orm or fastify.',
-  },
-];
+const infraModules = ['drizzle-orm', 'drizzle-orm/*', 'fastify', 'fastify/*', '@fastify/*'];
 
-const paymentsDomainImports = {
+const infraPatterns = [{ group: infraModules, message: 'Domain must not depend on drizzle-orm or fastify.' }];
+
+const paymentsImports = {
   patterns: [
-    ...infraPatterns,
+    { group: infraModules, message: 'payments must not depend on drizzle-orm or fastify.' },
     {
       group: ['@pialy/connector-pey', '@pialy/connector-pey/*', '@pialy/server', '@pialy/server/*', '@pialy/web', '@pialy/web/*'],
-      message: 'payments/domain must not import connector-pey or apps.',
+      message: 'payments must not import connector-pey or apps.',
     },
   ],
 };
@@ -54,7 +51,13 @@ export default tseslint.config(
           ],
         },
       ],
-      'no-restricted-imports': ['error', paymentsDomainImports],
+    },
+  },
+  {
+    // Hexagonal boundary: use cases and ports know neither the database, the web framework nor a rail.
+    files: ['packages/payments/src/**/*.ts'],
+    rules: {
+      'no-restricted-imports': ['error', paymentsImports],
     },
   },
   {

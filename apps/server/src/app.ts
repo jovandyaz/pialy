@@ -4,7 +4,10 @@ import { sql } from 'drizzle-orm';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Env } from './config/env.js';
 import { problemErrorHandler, problemNotFoundHandler } from './http/problem.js';
+import { webhookRoutes } from './http/routes/webhooks.js';
 import type { Db } from './infrastructure/db/client.js';
+import { createDrizzleUnitOfWork } from './infrastructure/payments/drizzle-unit-of-work.js';
+import { paymentReaction } from './infrastructure/payments/payment-reaction.js';
 
 export interface AppDeps {
   readonly db: Db;
@@ -55,6 +58,11 @@ export function buildApp(deps: AppDeps): FastifyInstance {
       app.log.error({ err }, 'health check: database unreachable');
       return reply.status(503).send({ ok: false, db: false });
     }
+  });
+
+  void app.register(webhookRoutes, {
+    connector: deps.connector,
+    uow: createDrizzleUnitOfWork(deps.db, paymentReaction),
   });
 
   return app;

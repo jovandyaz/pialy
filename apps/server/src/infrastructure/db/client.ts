@@ -3,6 +3,7 @@ import postgres from 'postgres';
 import * as schema from './schema.js';
 
 export type Db = PostgresJsDatabase<typeof schema>;
+export type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 export interface DbHandle {
   readonly db: Db;
