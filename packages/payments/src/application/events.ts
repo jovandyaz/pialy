@@ -15,14 +15,9 @@ export type UnmatchedPaymentReceived = {
 /**
  * How the received amount was established before it was found not to match:
  * - `none`: used as delivered (reconcile reads the rail already; a webhook without a transaction id);
- * - `rail_lookup`: re-read from the rail's own record of the transaction;
- * - `rail_lookup_failed`: the rail could not be asked, so the delivered amount stands.
+ * - `rail_lookup`: re-read from the rail's own record of the transaction.
  */
-export const AmountCheck = {
-  None: 'none',
-  RailLookup: 'rail_lookup',
-  RailLookupFailed: 'rail_lookup_failed',
-} as const;
+export const AmountCheck = { None: 'none', RailLookup: 'rail_lookup' } as const;
 export type AmountCheck = (typeof AmountCheck)[keyof typeof AmountCheck];
 
 /** Money arrived for an attempt but not for the intent's amount. It is recorded, never applied. */
@@ -35,7 +30,6 @@ export type PaymentAmountMismatched = {
   readonly expected: Money;
   readonly received: Money;
   readonly amountCheck: AmountCheck;
-  readonly lookupError?: string;
   readonly at: Date;
 };
 

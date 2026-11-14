@@ -40,7 +40,6 @@ export const paymentReaction: PaymentReaction = async (tx, event) => {
           expected: event.expected,
           received: event.received,
           amountCheck: event.amountCheck,
-          lookupError: event.lookupError ?? null,
           paidAt: event.at.toISOString(),
         },
       });

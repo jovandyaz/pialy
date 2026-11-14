@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  AmountUnverifiedError,
   RailUnavailableError,
   applyProviderPayment,
   money,
@@ -222,35 +223,41 @@ describe('applyProviderPayment', () => {
       expect(store.state.attempts.get('att1')).toMatchObject({ status: 'awaiting' });
     });
 
-    it('reports the mismatch with the delivered amount when the rail cannot be asked', async () => {
+    it('records nothing and asks for a retry when the rail cannot be asked', async () => {
       const store = seeded();
-      const rail: PaymentFinder = {
-        findPayments: () => Promise.reject(new RailUnavailableError('pey GET /transaction/tx1 failed: request timed out')),
-      };
+      const timeout = new RailUnavailableError('pey GET /transaction/tx1 failed: request timed out');
+      const rail: PaymentFinder = { findPayments: () => Promise.reject(timeout) };
 
-      const outcome = await applyProviderPayment(store.uow, rail, feeIncluded, 'webhook', RAW);
+      const failure = applyProviderPayment(store.uow, rail, feeIncluded, 'webhook', RAW);
 
-      expect(outcome).toBe('unmatched');
-      expect(store.state.events).toStrictEqual([expect.objectContaining({ amount: money(3), attemptId: 'att1' })]);
-      expect(store.state.reactions).toStrictEqual([
-        expect.objectContaining({
-          type: 'PaymentAmountMismatched',
-          received: money(3),
-          amountCheck: 'rail_lookup_failed',
-          lookupError: 'RailUnavailableError: pey GET /transaction/tx1 failed: request timed out',
-        }),
-      ]);
+      await expect(failure).rejects.toBeInstanceOf(AmountUnverifiedError);
+      await expect(failure).rejects.toMatchObject({ providerTxId: 'tx1', cause: timeout });
+      expect(store.state.events).toHaveLength(0);
+      expect(store.state.reactions).toHaveLength(0);
+      expect(store.state.attempts.get('att1')).toMatchObject({ status: 'awaiting' });
     });
 
-    it('reports the mismatch when the rail has no paid transaction with that id', async () => {
+    it('records nothing and asks for a retry when the rail has no paid transaction with that id yet', async () => {
       const store = seeded();
 
-      const outcome = await applyProviderPayment(store.uow, railReturning(), feeIncluded, 'webhook', RAW);
+      await expect(applyProviderPayment(store.uow, railReturning(), feeIncluded, 'webhook', RAW)).rejects.toThrow(
+        AmountUnverifiedError,
+      );
+      expect(store.state.events).toHaveLength(0);
+      expect(store.state.reactions).toHaveLength(0);
+    });
 
-      expect(outcome).toBe('unmatched');
-      expect(store.state.reactions).toStrictEqual([
-        expect.objectContaining({ amountCheck: 'rail_lookup_failed', received: money(3) }),
-      ]);
+    it('lets a later reconcile apply the payment after an unverified webhook', async () => {
+      const store = seeded();
+      await expect(applyProviderPayment(store.uow, railReturning(), feeIncluded, 'webhook', RAW)).rejects.toThrow(
+        AmountUnverifiedError,
+      );
+
+      const outcome = await applyProviderPayment(store.uow, unusedRail, aPayment({ amount: money(1) }), 'reconcile', RAW);
+
+      expect(outcome).toBe('applied');
+      expect(store.state.intents.get('pi_1')).toMatchObject({ status: 'succeeded' });
+      expect(store.state.reactions.map((e) => e.type)).toStrictEqual(['PaymentSucceeded']);
     });
 
     it('does not ask the rail again for a reconciled payment, which already carries its base amount', async () => {
@@ -328,6 +335,16 @@ describe('receiveWebhook', () => {
 
     failing = false;
     expect(await receiveWebhook(store.uow, unusedRail, webhook, RAW)).toBe('applied');
+  });
+
+  it('leaves no inbox row when the amount cannot be confirmed, so the rail redelivers', async () => {
+    const store = seeded();
+
+    await expect(
+      receiveWebhook(store.uow, railReturning(), { ...webhook, payment: aPayment({ amount: money(3) }) }, RAW),
+    ).rejects.toThrow(AmountUnverifiedError);
+    expect(store.state.inbox.size).toBe(0);
+    expect(store.state.events).toHaveLength(0);
   });
 
   it('logs the delivery after the amount is re-read from the rail', async () => {

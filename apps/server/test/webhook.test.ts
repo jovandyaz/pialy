@@ -325,19 +325,29 @@ describe('POST /api/webhooks/pey', () => {
     expect(await db.select().from(paymentIntents)).toEqual([expect.objectContaining({ status: 'processing' })]);
   });
 
-  it('flags amount_mismatch with the delivered amount when the rail lookup fails', async () => {
-    await holdingBooking();
+  it('answers 500 and records nothing when the rail cannot confirm the amount, so a later reconcile applies', async () => {
+    const f = await holdingBooking();
     fetchMock.mockResolvedValue(new Response('{"message":"down"}', { status: 503 }));
-    const app = appWith();
+    const logs = captureLogs();
+    const app = appWith(logs.stream);
     const body = pnWebhook({ amount: 0.03 });
 
-    const res = await app.inject({ method: 'POST', url: URL_PATH, headers: signed(body), payload: body });
+    const res = await app.inject({ method: 'POST', url: URL_PATH, headers: signed(body, 'msg_unverified_1'), payload: body });
     await app.close();
 
-    expect(res.json()).toEqual({ status: 'unmatched' });
-    const [flag] = await db.select().from(flags);
-    expect(flag).toMatchObject({ kind: 'amount_mismatch' });
-    expect(flag?.payload).toMatchObject({ received: { amountMinor: 3 }, amountCheck: 'rail_lookup_failed' });
+    expect(res.statusCode).toBe(500);
+    expect(res.headers['content-type']).toContain('application/problem+json');
+    expect(await rowCounts()).toEqual({ events: 0, inbox: 0, outbox: 0, flags: 0 });
+    const out = logs.text();
+    expect(out).toContain('msg_unverified_1');
+    expect(out).toContain('AmountUnverifiedError');
+    expect(out).not.toContain(CLABE);
+
+    const uow = createDrizzleUnitOfWork(db, paymentReaction);
+    const reconciled = { providerTxId: TX, amount: money(1), paidAt: new Date(PAID_AT_SECONDS * 1000), ref: { transactionId: TX } };
+    expect(await applyProviderPayment(uow, connector, reconciled, 'reconcile', { source: 'test' })).toBe('applied');
+    const [booking] = await db.select().from(bookings).where(eq(bookings.id, f.bookingId));
+    expect(booking?.status).toBe('confirmed');
   });
 
   it('answers 500 to a signed but malformed payment event so pey retries, and writes nothing', async () => {
