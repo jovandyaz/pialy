@@ -68,6 +68,13 @@ export function createDrizzleActiveBookingsReader(db: Db): ActiveBookingsReader 
   };
 }
 
+export function bookingExists(db: Db, token: string): Promise<boolean> {
+  return sanitized(async () => {
+    const rows = await db.select({ id: bookings.id }).from(bookings).where(eq(bookings.token, token)).limit(1);
+    return rows.length > 0;
+  });
+}
+
 export function findBookingView(db: Db, token: string): Promise<BookingView | null> {
   return sanitized(async () => {
     const [booking] = await db.select().from(bookings).where(eq(bookings.token, token)).limit(1);

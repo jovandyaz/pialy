@@ -23,6 +23,7 @@ import {
 } from '../../infrastructure/booking/booking-read-model.js';
 import { createDrizzleHoldRepository } from '../../infrastructure/booking/drizzle-booking-repository.js';
 import type { Db } from '../../infrastructure/db/client.js';
+import { bookingTokenParam } from '../booking-token.js';
 import { PROBLEM_CONTENT_TYPE, sendProblem } from '../problem.js';
 
 export interface BookingRoutesOptions {
@@ -39,7 +40,6 @@ const CUSTOMER_NAME_MAX_LENGTH = 80;
 const IDEMPOTENCY_KEY = /^[A-Za-z0-9_-]{16,255}$/;
 /** Structured-field strings (RFC 9651) arrive quoted. */
 const QUOTED = /^"(.*)"$/;
-const BOOKING_TOKEN = /^[A-Za-z0-9_-]{16,64}$/;
 const HTTP_BAD_REQUEST = 400;
 const HTTP_NOT_FOUND = 404;
 const HTTP_CONFLICT = 409;
@@ -57,7 +57,6 @@ const holdBody = z.strictObject({
   phone: z.string().max(PHONE_MAX_LENGTH),
   customerName: z.string().trim().max(CUSTOMER_NAME_MAX_LENGTH).optional(),
 });
-const tokenParams = z.object({ token: z.string() });
 
 interface DomainProblem {
   readonly status: number;
@@ -151,9 +150,9 @@ export const bookingRoutes: FastifyPluginAsync<BookingRoutesOptions> = async (ap
   });
 
   app.get('/api/bookings/:token', async (request, reply) => {
-    const params = tokenParams.safeParse(request.params);
-    if (!params.success || !BOOKING_TOKEN.test(params.data.token)) return sendProblem(reply, HTTP_NOT_FOUND);
-    const view = await findBookingView(db, params.data.token);
+    const token = bookingTokenParam(request.params);
+    if (token === null) return sendProblem(reply, HTTP_NOT_FOUND);
+    const view = await findBookingView(db, token);
     if (view === null) return sendProblem(reply, HTTP_NOT_FOUND);
     return view;
   });

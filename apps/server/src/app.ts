@@ -5,16 +5,20 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { Env } from './config/env.js';
 import { problemErrorHandler, problemNotFoundHandler } from './http/problem.js';
 import { bookingRoutes } from './http/routes/bookings.js';
+import { eventRoutes } from './http/routes/events.js';
 import { webhookRoutes } from './http/routes/webhooks.js';
 import type { Db } from './infrastructure/db/client.js';
 import { createDrizzleUnitOfWork } from './infrastructure/payments/drizzle-unit-of-work.js';
 import { paymentReaction } from './infrastructure/payments/payment-reaction.js';
+import type { SseHub } from './modules/realtime/sse-hub.js';
 
 export interface AppDeps {
   readonly db: Db;
   readonly connector: RailConnector;
   readonly clock: Clock;
   readonly env: Env;
+  /** Live-update streams; the outbox relay started next to the app publishes into it. */
+  readonly hub: SseHub;
   /** Log destination; defaults to stdout. Tests pass a capturing stream. */
   readonly logStream?: NodeJS.WritableStream;
 }
@@ -69,6 +73,12 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     clock: deps.clock,
     deposit: money(deps.env.DEMO_DEPOSIT_CENTS),
     phoneHashSalt,
+  });
+
+  void app.register(eventRoutes, { db: deps.db, hub: deps.hub });
+  app.addHook('preClose', (done) => {
+    deps.hub.closeAll();
+    done();
   });
 
   void app.register(webhookRoutes, {

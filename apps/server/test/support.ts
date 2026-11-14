@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { loadEnv } from '../src/config/env.js';
 import type { AppDeps } from '../src/app.js';
 import { createDb, type DbHandle } from '../src/infrastructure/db/client.js';
+import { createSseHub } from '../src/modules/realtime/sse-hub.js';
 
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? 'postgres://postgres:postgres@localhost:54329/pialy_test';
@@ -35,6 +36,7 @@ export function testDeps(handle: DbHandle, overrides: Partial<AppDeps> = {}): Ap
     connector: fakeConnector,
     clock: { now: () => new Date('2026-11-14T12:00:00Z') },
     env: loadEnv({ NODE_ENV: 'test', DATABASE_URL: TEST_DATABASE_URL, PHONE_HASH_SALT: 'test-phone-hash-salt' }),
+    hub: createSseHub(),
     ...overrides,
   };
 }

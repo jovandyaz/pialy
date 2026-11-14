@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigserial,
   boolean,
   char,
   check,
@@ -195,12 +196,14 @@ export const outbox = pgTable(
   'outbox',
   {
     id: uuid('id').primaryKey().defaultRandom(),
+    /** Insert order for the relay; uuids have none. Commit order may differ, which the relay tolerates. */
+    seq: bigserial('seq', { mode: 'number' }).notNull(),
     topic: text('topic').notNull(),
     payload: jsonb('payload').notNull(),
     createdAt: createdAt(),
     publishedAt: tstz('published_at'),
   },
-  (t) => [index('outbox_unpublished_idx').on(t.createdAt).where(sql`${t.publishedAt} IS NULL`)],
+  (t) => [index('outbox_unpublished_idx').on(t.seq).where(sql`${t.publishedAt} IS NULL`)],
 );
 
 export const flags = pgTable(
