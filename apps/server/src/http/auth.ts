@@ -10,6 +10,7 @@ export const OWNER_COOKIE = 'pialy_owner';
 export const SESSION_HOURS = 12;
 
 const MS_PER_HOUR = 3_600_000;
+const MS_PER_SECOND = 1000;
 const SESSION_MS = SESSION_HOURS * MS_PER_HOUR;
 const HTTP_NO_CONTENT = 204;
 const HTTP_BAD_REQUEST = 400;
@@ -50,13 +51,17 @@ export function createOwnerAuth(config: OwnerAuthConfig): OwnerAuth {
   // One warn line per lockout window, not one per rejected request.
   let lockLogged = false;
 
-  function lockedOut(log: { warn(message: string): void }): boolean {
-    const cutoff = clock.now().getTime() - GLOBAL_FAILED_PINS.windowMs;
-    failedAt = failedAt.filter((at) => at > cutoff);
+  /** Seconds until the global cap frees a login, or `null` when logins are open. */
+  function lockoutSeconds(log: { warn(message: string): void }): number | null {
+    const now = clock.now().getTime();
+    failedAt = failedAt.filter((at) => at > now - GLOBAL_FAILED_PINS.windowMs);
     const locked = failedAt.length >= GLOBAL_FAILED_PINS.max;
     if (locked && !lockLogged) log.warn(LOCKOUT_LOG);
     lockLogged = locked;
-    return locked;
+    if (!locked) return null;
+    // Failures are kept oldest first: logins reopen once this one leaves the window.
+    const freeing = failedAt[failedAt.length - GLOBAL_FAILED_PINS.max] ?? now;
+    return Math.max(1, Math.ceil((freeing + GLOBAL_FAILED_PINS.windowMs - now) / MS_PER_SECOND));
   }
 
   function isOwner(request: FastifyRequest): boolean {
@@ -99,7 +104,11 @@ export function createOwnerAuth(config: OwnerAuthConfig): OwnerAuth {
     app.post('/api/session', { config: { rateLimit: PIN_ATTEMPTS } }, async (request, reply) => {
       const body = pinBody.safeParse(request.body);
       if (!body.success) return sendProblem(reply, HTTP_BAD_REQUEST, 'Escribe tu PIN');
-      if (lockedOut(request.log)) return sendProblem(reply, HTTP_TOO_MANY_REQUESTS, PIN_LIMIT_DETAIL);
+      const retryAfter = lockoutSeconds(request.log);
+      if (retryAfter !== null) {
+        void reply.header('retry-after', String(retryAfter));
+        return sendProblem(reply, HTTP_TOO_MANY_REQUESTS, PIN_LIMIT_DETAIL);
+      }
       if (!timingSafeEqual(digest(body.data.pin), expectedPin)) {
         failedAt.push(clock.now().getTime());
         return sendProblem(reply, HTTP_UNAUTHORIZED, 'PIN incorrecto');

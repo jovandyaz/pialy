@@ -121,6 +121,10 @@ describe('owner session', () => {
     const locked = await from('10.0.1.1', TEST_PIN);
     expect(locked.statusCode).toBe(429);
     expect(locked.headers['content-type']).toContain('application/problem+json');
+    expect(locked.headers['retry-after']).toBe('600');
+
+    now = new Date(NOW.getTime() + 4 * 60_000);
+    expect((await from('10.0.1.3', TEST_PIN)).headers['retry-after']).toBe('360');
 
     now = new Date(NOW.getTime() + 10 * 60_000 + 1);
     expect((await from('10.0.1.2', TEST_PIN)).statusCode).toBe(204);
