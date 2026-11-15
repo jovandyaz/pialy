@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { api, API_PATH, FLAG_KIND, STATUS, type Board, type BoardSlot, type Flag, type OwnerBooking, type RecentlyPaid } from '../api';
 import { PassScanner } from '../components/PassScanner';
 import { ErrorNote, Loading, Screen } from '../components/Screen';
@@ -6,7 +6,7 @@ import { ScanIcon, SoundIcon } from '../components/icons';
 import { Button } from '../components/ui/Button';
 import { Field } from '../components/ui/Field';
 import { Numeral } from '../components/ui/Numeral';
-import { Panel } from '../components/ui/Panel';
+import { Label, Panel } from '../components/ui/Panel';
 import { Sheet } from '../components/ui/Sheet';
 import { StatusTag } from '../components/ui/StatusTag';
 import { depositsTotal } from '../lib/business';
@@ -136,7 +136,7 @@ export function BoardPage() {
   const holdingCount = bookings.filter((b) => b.status === STATUS.holding).length;
 
   return (
-    <Screen wide>
+    <Screen wide className="md:max-w-3xl lg:max-w-5xl">
       <header className="border-b-2 border-ink px-5 pt-4.5 pb-3.5">
         <div className="flex items-center justify-between gap-2.5">
           <h1 className="text-lg font-extrabold font-stretch-105%">Hoy · {boardDayLabel(date)}</h1>
@@ -184,23 +184,29 @@ export function BoardPage() {
       ) : null}
 
       {data === null ? null : (
-        <>
-          {data.flags.map((flag) => (
-            <FlagAlert key={flag.id} flag={flag} onResolve={() => {
-                setResolving(flag);
-                setResolveOpen(true);
-              }} />
-          ))}
-          <ol aria-label="Agenda" className="mx-5 mt-3.5 mb-6 border-t border-ink">
+        <div className="lg:grid lg:flex-1 lg:grid-cols-[minmax(0,1fr)_20rem]">
+          <FlagsPanel
+            flags={data.flags}
+            onResolve={(flag) => {
+              setResolving(flag);
+              setResolveOpen(true);
+            }}
+          />
+          <ol aria-label="Agenda" className="mx-5 mt-3.5 mb-6 border-t border-ink lg:col-start-1 lg:row-start-1">
             {data.slots.map((slot) => (
               <AgendaRow key={slot.start} slot={slot} flash={slot.booking !== null && flashing.has(slot.booking.token)} />
             ))}
           </ol>
-        </>
+        </div>
       )}
 
       <div className="sticky bottom-0 z-10 mt-auto border-t-2 border-ink bg-paper px-5 pt-3 pb-[max(1.125rem,env(safe-area-inset-bottom))]">
-        <div role="status" aria-live="polite" className="pointer-events-none absolute inset-x-4 bottom-full mb-3">
+        {/* Kept off the agenda list: the row it announces must stay visible while it flashes. */}
+        <div
+          role="status"
+          aria-live="polite"
+          className="pointer-events-none fixed inset-x-4 top-[max(0.75rem,env(safe-area-inset-top))] mx-auto max-w-xl lg:absolute lg:top-auto lg:right-5 lg:bottom-full lg:left-auto lg:mb-3 lg:w-70"
+        >
           {toast === null ? null : (
             <div className="flex animate-rise items-center gap-3 rounded-sm bg-paid px-4 py-3.5 font-bold text-paper">
               <Numeral size="toast">{toast.time}</Numeral>
@@ -208,7 +214,7 @@ export function BoardPage() {
             </div>
           )}
         </div>
-        <Button variant="ghost" size="md" onClick={() => setScanOpen(true)}>
+        <Button variant="ghost" size="md" className="md:mx-auto md:flex md:max-w-sm" onClick={() => setScanOpen(true)}>
           <ScanIcon />
           Escanear pase
         </Button>
@@ -245,7 +251,7 @@ function AgendaRow({ slot, flash }: { readonly slot: BoardSlot; readonly flash: 
       </span>
       <div className="min-w-0">
         <b className="block truncate text-base">{booking === null ? '—' : (booking.customerName ?? 'Sin nombre')}</b>
-        <span className="text-[13px] text-muted">{rowDetail(booking)}</span>
+        <span className="block truncate text-[13px] text-muted">{rowDetail(booking)}</span>
       </div>
       <StatusTag look={look} />
     </li>
@@ -276,12 +282,35 @@ function flagAction(flag: Flag): string {
   return needsRefund(flag) ? 'Registrar devolución SPEI' : 'Marcar como revisado';
 }
 
+function FlagsPanel({ flags, onResolve }: { readonly flags: readonly Flag[]; readonly onResolve: (flag: Flag) => void }) {
+  const headingId = useId();
+  return (
+    <section
+      aria-labelledby={headingId}
+      className={cn('px-5 lg:col-start-2 lg:row-start-1 lg:border-l-2 lg:border-ink lg:pt-4 lg:pb-6', flags.length === 0 && 'hidden lg:block')}
+    >
+      <h2 id={headingId} className="sr-only lg:not-sr-only">
+        <Label>Por revisar</Label>
+      </h2>
+      {flags.length === 0 ? (
+        <p className="mt-2 text-sm text-muted">Sin pagos por revisar.</p>
+      ) : (
+        <div className="grid gap-3.5 pt-3.5 md:grid-cols-[repeat(auto-fit,minmax(18rem,1fr))] lg:grid-cols-1 lg:pt-2.5">
+          {flags.map((flag) => (
+            <FlagAlert key={flag.id} flag={flag} onResolve={() => onResolve(flag)} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function FlagAlert({ flag, onResolve }: { readonly flag: Flag; readonly onResolve: () => void }) {
   return (
-    <Panel tone="late" as="div" role="status" className="mx-5 mt-3.5 px-3.5 py-3 text-sm">
+    <Panel tone="late" as="div" role="status" className="flex flex-col px-3.5 py-3 text-sm">
       <b className="block text-[15px]">{flagTitle(flag)}</b>
-      <span className="text-ink">{flagDetail(flag)}</span>
-      <Button variant="late" size="sm" className="mt-2.5" onClick={onResolve}>
+      <span className="mb-2.5 text-ink">{flagDetail(flag)}</span>
+      <Button variant="late" size="sm" className="mt-auto" onClick={onResolve}>
         {flagAction(flag)}
       </Button>
     </Panel>
