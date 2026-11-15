@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { get } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
@@ -103,7 +103,26 @@ describe('owner session', () => {
     const statuses: number[] = [];
     for (let i = 0; i < 6; i += 1) statuses.push((await login(app, 'wrong')).statusCode);
     expect(statuses).toEqual([401, 401, 401, 401, 401, 429]);
+    const limited = await login(app, 'wrong');
+    expect(limited.headers['content-type']).toContain('application/problem+json');
+    expect(limited.json()).toMatchObject({ status: 429, detail: 'Demasiados intentos. Espera unos minutos.' });
     expect((await login(app)).statusCode).toBe(429);
+  });
+
+  it('caps wrong PINs across all IPs at 20 per 10 minutes, locking out even the right PIN until the window passes', async () => {
+    let now = NOW;
+    current = buildApp(testDeps(handle, { clock: { now: () => now } }));
+    const app = current;
+    const from = (ip: string, pin: string) =>
+      app.inject({ method: 'POST', url: '/api/session', headers: { 'x-real-ip': ip }, payload: { pin } });
+    for (let i = 1; i <= 20; i += 1) expect((await from(`10.0.0.${i}`, 'wrong')).statusCode).toBe(401);
+
+    const locked = await from('10.0.1.1', TEST_PIN);
+    expect(locked.statusCode).toBe(429);
+    expect(locked.headers['content-type']).toContain('application/problem+json');
+
+    now = new Date(NOW.getTime() + 10 * 60_000 + 1);
+    expect((await from('10.0.1.2', TEST_PIN)).statusCode).toBe(204);
   });
 
   it('sets a signed httpOnly SameSite=Strict cookie that lasts 12 hours', async () => {
@@ -216,6 +235,7 @@ describe('board', () => {
       {
         id: flag!.id,
         kind: 'refund_due',
+        trackingKey: 'K1',
         createdAt: expect.any(String),
         reason: 'duplicate_payment',
         paidAt: '2026-11-14T12:00:00.000Z',
@@ -248,6 +268,32 @@ describe('board', () => {
     expect(again.statusCode).toBe(404);
     const noNote = await app.inject({ method: 'POST', url: `/api/flags/${flag!.id}/resolve`, headers: { cookie }, payload: {} });
     expect(noNote.statusCode).toBe(400);
+  });
+});
+
+describe('board flags with bad rows', () => {
+  it('still serves the board when one flag has a malformed payload or an unknown kind', async () => {
+    const app = appAt();
+    const cookie = await ownerCookie(app);
+    await db.execute(sql`ALTER TABLE flags DROP CONSTRAINT flags_kind_check`);
+    try {
+      await db.insert(flags).values([
+        { kind: 'refund_due', payload: { amount: 'not money' } },
+        { kind: 'mystery', payload: { reason: 'x' } },
+        { kind: 'amount_mismatch', payload: { reason: 'ok' } },
+      ]);
+
+      const response = await app.inject({ method: 'GET', url: `/api/board?date=${DATE}`, headers: { cookie } });
+
+      expect(response.statusCode).toBe(200);
+      const rows = response.json<{ flags: { kind: string; reason: string | null; trackingKey: string | null }[] }>().flags;
+      expect(rows.map((f) => f.kind).sort()).toEqual(['amount_mismatch', 'refund_due', 'unknown']);
+      expect(rows.find((f) => f.kind === 'refund_due')).toMatchObject({ reason: null, trackingKey: null });
+      expect(rows.find((f) => f.kind === 'amount_mismatch')?.reason).toBe('ok');
+    } finally {
+      await db.delete(flags);
+      await db.execute(sql`ALTER TABLE flags ADD CONSTRAINT flags_kind_check CHECK (kind IN ('unmatched_payment','refund_due','amount_mismatch'))`);
+    }
   });
 });
 

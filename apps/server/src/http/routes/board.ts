@@ -48,7 +48,7 @@ const resolveBody = z.strictObject({ note: z.string().trim().min(1).max(NOTE_MAX
  * verify lookup. Customer data is limited to name, last 4 digits and bank name.
  */
 export const boardRoutes: FastifyPluginAsync<BoardRoutesOptions> = async (app, { db, clock, hub, auth }) => {
-  const reader = createDrizzleBoardReader(db);
+  const reader = createDrizzleBoardReader(db, app.log);
   const checkInStore = createDrizzleCheckInStore(db);
   const flagStore = createDrizzleResolveFlagStore(db);
   const owner = { preHandler: auth.requireOwner };

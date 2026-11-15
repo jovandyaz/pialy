@@ -1,6 +1,7 @@
 import { and, asc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { CheckInStore } from '../../modules/booking/application/check-in.js';
+import { FlagKind } from '../../modules/booking/application/on-payment-event.js';
 import type { ResolveFlagStore } from '../../modules/booking/application/resolve-flag.js';
 import { bankNameOf } from '../../modules/booking/domain/banks.js';
 import {
@@ -19,6 +20,8 @@ import { oneOf } from '../payments/drizzle-payment-repository.js';
 import { changeBooking } from './drizzle-booking-repository.js';
 
 const ON_BOARD = [BookingStatus.Holding, BookingStatus.Confirmed, BookingStatus.CheckedIn];
+const UNKNOWN_FLAG_KIND = 'unknown';
+const FLAG_KINDS: readonly FlagKind[] = Object.values(FlagKind);
 const FLAG_RESOLVED = 'flag.resolved';
 
 /**
@@ -56,7 +59,9 @@ export interface BoardBooking {
 
 export interface BoardFlag {
   readonly id: string;
-  readonly kind: string;
+  readonly kind: FlagKind | typeof UNKNOWN_FLAG_KIND;
+  /** The payer bank's tracking key (clave de rastreo), to find the payment for a manual refund. */
+  readonly trackingKey: string | null;
   readonly createdAt: Date;
   readonly reason: string | null;
   readonly paidAt: string | null;
@@ -71,6 +76,7 @@ const moneySchema = z.object({ amountMinor: z.number(), currency: z.string() });
 const flagPayloadSchema = z.looseObject({
   reason: z.string().nullish(),
   paidAt: z.string().nullish(),
+  trackingKey: z.string().nullish(),
   amount: moneySchema.nullish(),
   expected: moneySchema.nullish(),
   received: moneySchema.nullish(),
@@ -82,7 +88,12 @@ export interface BoardReader {
   findBooking(token: string): Promise<BoardBooking | null>;
 }
 
-export function createDrizzleBoardReader(db: Db): BoardReader {
+/** Just enough logger to report a bad row by id. */
+export interface RowWarnings {
+  warn(fields: Record<string, unknown>, message: string): void;
+}
+
+export function createDrizzleBoardReader(db: Db, log: RowWarnings): BoardReader {
   return {
     bookingsStartingIn(range) {
       return sanitized(async () => {
@@ -113,10 +124,16 @@ export function createDrizzleBoardReader(db: Db): BoardReader {
           .where(isNull(flags.resolvedAt))
           .orderBy(asc(flags.createdAt), asc(flags.id));
         return rows.map((row): BoardFlag => {
-          const payload = flagPayloadSchema.parse(row.payload);
+          // One malformed row must not take the whole board down; only its id is logged.
+          const parsed = flagPayloadSchema.safeParse(row.payload);
+          if (!parsed.success) log.warn({ flagId: row.id }, 'flag payload does not parse; showing it without details');
+          const payload = parsed.success ? parsed.data : {};
+          const kind = FLAG_KINDS.find((candidate) => candidate === row.kind);
+          if (kind === undefined) log.warn({ flagId: row.id }, 'flag has an unknown kind');
           return {
             id: row.id,
-            kind: row.kind,
+            kind: kind ?? UNKNOWN_FLAG_KIND,
+            trackingKey: payload.trackingKey ?? null,
             createdAt: row.createdAt,
             reason: payload.reason ?? null,
             paidAt: payload.paidAt ?? null,
