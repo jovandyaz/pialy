@@ -1,5 +1,8 @@
 import { z } from 'zod';
 
+// Skip Zod's eval probe: the CSP blocks eval and would log a violation on every page.
+z.config({ jitless: true });
+
 export const BOOKING_STATUSES = ['holding', 'confirmed', 'checked_in', 'expired', 'canceled'] as const;
 export type BookingStatus = (typeof BOOKING_STATUSES)[number];
 export const STATUS = {
