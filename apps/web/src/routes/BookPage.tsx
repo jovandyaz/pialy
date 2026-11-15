@@ -66,56 +66,62 @@ export function BookPage() {
   const serviceMinutes = firstSlot ? minutesBetween(firstSlot.start, firstSlot.end) : DEFAULT_SERVICE_MINUTES;
 
   return (
-    <Screen>
+    <Screen className="lg:max-w-5xl">
       <TopBar title={BUSINESS.name} />
-      <div className="dot-bg flex-1 p-5">
-        <h1 className="text-[28px] leading-[1.05] font-extrabold tracking-[-0.02em] font-stretch-108%">Aparta tu cita</h1>
-        <p className="mt-1.5 text-base text-muted">Paga un anticipo con CoDi desde tu banco. Sin cuenta, sin tarjeta.</p>
-        <div className="flex items-baseline justify-between border-b border-brand/35 py-3.5">
-          <b className="text-lg">
-            {BUSINESS.service} · {serviceMinutes} min
-          </b>
-          <span className="font-bold text-brand">Anticipo {BUSINESS.deposit}</span>
+      <div className="flex flex-1 flex-col lg:grid lg:grid-cols-[minmax(0,1fr)_minmax(0,24rem)]">
+        <div className="dot-bg flex-1 p-5">
+          <h1 className="text-[28px] leading-[1.05] font-extrabold tracking-[-0.02em] font-stretch-108%">Aparta tu cita</h1>
+          <p className="mt-1.5 text-base text-muted">Paga un anticipo con CoDi desde tu banco. Sin cuenta, sin tarjeta.</p>
+          <div className="flex items-baseline justify-between border-b border-brand/35 py-3.5">
+            <b className="text-lg">
+              {BUSINESS.service} · {serviceMinutes} min
+            </b>
+            <span className="font-bold text-brand">Anticipo {BUSINESS.deposit}</span>
+          </div>
+
+          <div role="group" aria-label="Día" className="mt-4 mb-1 grid grid-cols-5 border border-ink">
+            {days.map((day) => {
+              const on = day === date;
+              return (
+                <button
+                  key={day}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() => {
+                    autoAdvance.current = false;
+                    setDate(day);
+                    setSelected(null);
+                  }}
+                  className={cn(
+                    'cursor-pointer border-r border-ink py-2 text-center text-[13px] font-semibold last:border-r-0',
+                    on ? 'bg-ink text-paper' : 'bg-paper',
+                  )}
+                >
+                  {weekdayShort(day)}
+                  <span className="block text-[22px] leading-[1.15] font-extrabold tabular-nums">{dayOfMonth(day)}</span>
+                </button>
+              );
+            })}
+          </div>
+
+          <SlotGrid state={slots} selected={selected} onSelect={setSelected} onRetry={() => loadSlots(date)} />
         </div>
 
-        <div role="group" aria-label="Día" className="mt-4 mb-1 grid grid-cols-5 border border-ink">
-          {days.map((day) => {
-            const on = day === date;
-            return (
-              <button
-                key={day}
-                type="button"
-                aria-pressed={on}
-                onClick={() => {
-                  autoAdvance.current = false;
-                  setDate(day);
-                  setSelected(null);
-                }}
-                className={cn(
-                  'cursor-pointer border-r border-ink py-2 text-center text-[13px] font-semibold last:border-r-0',
-                  on ? 'bg-ink text-paper' : 'bg-paper',
-                )}
-              >
-                {weekdayShort(day)}
-                <span className="block text-[22px] leading-[1.15] font-extrabold tabular-nums">{dayOfMonth(day)}</span>
-              </button>
-            );
-          })}
+        <div className="contents lg:block lg:border-l-2 lg:border-ink">
+          {selected === null ? (
+            <p className="hidden p-5 text-muted lg:block">Elige un horario libre para apartarlo.</p>
+          ) : (
+            <HoldSheet
+              key={selected.start}
+              slot={selected}
+              onSlotTaken={() => {
+                setSelected(null);
+                loadSlots(date);
+              }}
+            />
+          )}
         </div>
-
-        <SlotGrid state={slots} selected={selected} onSelect={setSelected} onRetry={() => loadSlots(date)} />
       </div>
-
-      {selected === null ? null : (
-        <HoldSheet
-          key={selected.start}
-          slot={selected}
-          onSlotTaken={() => {
-            setSelected(null);
-            loadSlots(date);
-          }}
-        />
-      )}
     </Screen>
   );
 }
@@ -161,7 +167,7 @@ function SlotGrid({
     return <p className="mt-4 border border-ink bg-paper p-4 font-bold">No quedan horarios este día. Elige otro.</p>;
   }
   return (
-    <div className="mt-4 grid grid-cols-3 border-t border-l border-ink">
+    <div className="mt-4 grid grid-cols-3 border-t border-l border-ink lg:grid-cols-4">
       {state.data.map((slot) => {
         const isSelected = selected?.start === slot.start;
         const look = CELL_LOOK[isSelected ? 'selected' : slot.state];
@@ -192,6 +198,8 @@ function SlotGrid({
     </div>
   );
 }
+
+const SIDE_PANEL_FROM_LG = 'lg:top-0 lg:bottom-auto lg:max-h-dvh lg:overflow-y-auto lg:border-t-0';
 
 function HoldSheet({ slot, onSlotTaken }: { readonly slot: SlotItem; readonly onSlotTaken: () => void }) {
   const [phone, setPhone] = useState('');
@@ -232,7 +240,7 @@ function HoldSheet({ slot, onSlotTaken }: { readonly slot: SlotItem; readonly on
   }
 
   return (
-    <Sheet open docked label="Confirmar horario">
+    <Sheet open docked label="Confirmar horario" className={SIDE_PANEL_FROM_LG}>
       <form onSubmit={submit} noValidate>
         <div className="flex items-baseline justify-between">
           <Label>{shortDateLabel(slot.start)}</Label>

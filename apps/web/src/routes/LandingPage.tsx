@@ -126,7 +126,7 @@ function Hero({ loop }: { readonly loop: SlotLoop }) {
   const example = exampleFor(loop);
   return (
     <section aria-labelledby="hero-title" className="dot-bg border-b border-ink">
-      <div className={cn(shell, 'grid gap-8 pt-6 pb-10 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center lg:gap-14 lg:py-20')}>
+      <div className={cn(shell, 'grid gap-8 pt-6 pb-10 md:grid-cols-[minmax(0,1fr)_minmax(0,23rem)] md:items-center md:gap-10 md:py-14 lg:grid-cols-[minmax(0,1fr)_auto] lg:gap-14 lg:py-20')}>
         <div className="max-w-xl">
           <h1
             id="hero-title"
@@ -138,16 +138,15 @@ function Hero({ loop }: { readonly loop: SlotLoop }) {
             La agenda en línea para negocios que trabajan con citas. Tu cliente aparta su horario y paga desde la app de su banco,
             con CoDi®, sin tarjeta.
           </p>
-          <LiveSlotCard loop={loop} example={example} className="mt-5 lg:hidden" />
+          <LiveSlotCard loop={loop} example={example} className="mt-5 md:hidden" />
           <div className="mt-5 flex flex-col gap-2 sm:max-w-sm lg:mt-8">
             <DemoCta />
             <p className="text-center text-[13px] text-muted sm:text-left">La demo cobra $0.01 real desde tu banco y no se devuelve. Antes de probar, registra tu celular en CoDi en la app de tu banco.</p>
-            <AgendaLink className="justify-center gap-1.5 text-[15px] sm:justify-start">
-              Entrar a tu agenda <span className="font-semibold text-muted no-underline">(pide PIN)</span>
-            </AgendaLink>
           </div>
         </div>
         <PhonePair loop={loop} example={example} />
+        {/* Breakpoint twin of the in-column card (md:hidden): only one is ever displayed. */}
+        <LiveSlotCard loop={loop} example={example} className="hidden md:block lg:hidden" />
       </div>
     </section>
   );
@@ -251,7 +250,7 @@ function PhonePair({ loop, example }: LoopProps) {
       <figcaption className="mb-3">
         <Label>Ejemplo · el mismo pago en los dos celulares</Label>
       </figcaption>
-      <div aria-hidden="true" className="grid grid-cols-[300px_340px] items-start gap-6">
+      <div aria-hidden="true" className="grid grid-cols-[320px_320px] items-start gap-6">
         <CustomerPhone loop={loop} example={example} />
         <OwnerAgenda loop={loop} example={example} />
       </div>
@@ -429,7 +428,7 @@ function SectionHeading({ id, children }: { readonly id: string; readonly childr
 function Deposits() {
   return (
     <section aria-labelledby="deposits-title" className="border-b border-ink">
-      <div className={cn(shell, 'grid gap-8 py-14 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:gap-16 lg:py-24')}>
+      <div className={cn(shell, 'grid gap-8 py-14 md:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] md:gap-10 lg:gap-16 lg:py-24')}>
         <div>
           <SectionHeading id="deposits-title">Tú decides cuánto pides de anticipo.</SectionHeading>
           <p className="mt-4 max-w-[48ch] text-muted lg:text-lg">
@@ -636,7 +635,6 @@ function Close() {
           </div>
           <div className="flex flex-col gap-2">
             <DemoCta />
-            <AgendaLink className="justify-center text-[15px]">Entrar a tu agenda</AgendaLink>
           </div>
         </div>
       </div>
