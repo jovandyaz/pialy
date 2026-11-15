@@ -1,0 +1,7 @@
+packages:
+  - packages/*
+  - apps/*
+allowBuilds:
+  esbuild: false
+overrides:
+  ip-address: 10.7.5
