@@ -201,6 +201,23 @@ describe('POST /api/webhooks/pey', () => {
     expect(out).not.toContain(headers['webhook-signature']);
   });
 
+  it('stores the payload with the payer CLABE cut to its last 4 digits, keeping tracking key and bank code', async () => {
+    const f = await holdingBooking();
+    const app = appWith();
+    const body = pnWebhook({ attemptId: f.attemptId });
+
+    const res = await app.inject({ method: 'POST', url: URL_PATH, headers: signed(body), payload: body });
+    await app.close();
+
+    expect(res.json()).toEqual({ status: 'applied' });
+    const [event] = await db.select().from(paymentEvents);
+    expect(event?.raw).toMatchObject({
+      transactionId: TX,
+      metadata: { clabe: `${'*'.repeat(14)}7890`, bankCode: 40012, accountType: 40, trackingKey: '0192191042' },
+    });
+    expect(JSON.stringify(event?.raw)).not.toContain(CLABE);
+  });
+
   it('answers a redelivery of the same webhook-id as duplicate without new rows', async () => {
     const f = await holdingBooking();
     const app = appWith();

@@ -22,6 +22,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SUPPORTED_CURRENCY = 'MXN';
 /** Fetching two rows is enough to tell a unique match from an ambiguous one. */
 const AMBIGUITY_PROBE = 2;
+const VISIBLE_ACCOUNT_DIGITS = 4;
 
 export function createDrizzlePaymentRepository(tx: DbTx): PaymentRepository {
   return {
@@ -65,7 +66,7 @@ export function createDrizzlePaymentRepository(tx: DbTx): PaymentRepository {
           currency: event.amount.currency,
           trackingKey: event.trackingKey ?? null,
           late: event.late,
-          raw: event.raw,
+          raw: withMaskedPayerAccount(event.raw),
         })
         .onConflictDoNothing({ target: paymentEvents.providerTxId })
         .returning({ id: paymentEvents.id });
@@ -95,6 +96,24 @@ export function createDrizzlePaymentRepository(tx: DbTx): PaymentRepository {
       if (saved.length === 0) throw new Error(`attempt ${attempt.id} does not exist`);
     },
   };
+}
+
+/**
+ * pey's `metadata.clabe` is the payer's account, or their phone when `accountType` is 10: only its
+ * last digits are stored. The tracking key and bank code stay, enough to trace a manual SPEI refund.
+ */
+function withMaskedPayerAccount(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  const { metadata } = raw;
+  if (!isRecord(metadata)) return raw;
+  const { clabe } = metadata;
+  if (typeof clabe !== 'string' && typeof clabe !== 'number') return raw;
+  const account = String(clabe);
+  return { ...raw, metadata: { ...metadata, clabe: account.slice(-VISIBLE_ACCOUNT_DIGITS).padStart(account.length, '*') } };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 async function findAttemptKeys(
