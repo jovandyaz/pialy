@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, ApiError, HTTP_CONFLICT, type SlotItem, type SlotState } from '../api';
 import { ErrorNote, Screen, TopBar } from '../components/Screen';
 import { PhoneIcon } from '../components/icons';
@@ -29,15 +29,29 @@ export function BookPage() {
   const [date, setDate] = useState(() => days[0] ?? '');
   const [slots, setSlots] = useState<Remote<Slots>>(loading);
   const [selected, setSelected] = useState<SlotItem | null>(null);
+  // Until the customer picks a day, a default day with nothing free skips ahead to the next one that has.
+  const autoAdvance = useRef(true);
 
-  const loadSlots = useCallback((day: string, signal?: AbortSignal) => {
-    api
-      .slots(day, signal)
-      .then((data) => setSlots(ready(data.slots)))
-      .catch((error: unknown) => {
-        if (!signal?.aborted) setSlots(failed(error));
-      });
-  }, []);
+  const loadSlots = useCallback(
+    (day: string, signal?: AbortSignal) => {
+      api
+        .slots(day, signal)
+        .then((data) => {
+          if (signal?.aborted) return;
+          const nextDay = days[days.indexOf(day) + 1];
+          if (autoAdvance.current && nextDay !== undefined && !hasFreeSlot(data.slots)) {
+            setDate(nextDay);
+            return;
+          }
+          autoAdvance.current = false;
+          setSlots(ready(data.slots));
+        })
+        .catch((error: unknown) => {
+          if (!signal?.aborted) setSlots(failed(error));
+        });
+    },
+    [days],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
@@ -71,6 +85,7 @@ export function BookPage() {
                 type="button"
                 aria-pressed={on}
                 onClick={() => {
+                  autoAdvance.current = false;
                   setDate(day);
                   setSelected(null);
                 }}
@@ -102,6 +117,8 @@ export function BookPage() {
     </Screen>
   );
 }
+
+export const hasFreeSlot = (slots: Slots): boolean => slots.some((slot) => slot.state === 'free');
 
 const CELL_LOOK: Readonly<Record<SlotState | 'selected', { cell: string; time: string; sub: string }>> = {
   free: { cell: 'bg-paper', time: '', sub: 'text-muted' },
