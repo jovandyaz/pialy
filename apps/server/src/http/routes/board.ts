@@ -16,6 +16,7 @@ import {
   BookingNotConfirmedError,
   BookingNotFoundError,
   FlagNotFoundError,
+  PassNotForTodayError,
 } from '../../modules/booking/domain/booking.js';
 import { InvalidDateError, generateSlots, localDateOf } from '../../modules/booking/domain/slots.js';
 import type { SseHub } from '../../modules/realtime/sse-hub.js';
@@ -39,6 +40,7 @@ const RECENTLY_PAID_MS = 15 * 60_000;
 const DATE_FORMAT_DETAIL = 'Indica la fecha como AAAA-MM-DD';
 const NOT_CONFIRMED_TYPE = 'urn:pialy:problem:deposit-not-confirmed';
 const ALREADY_CHECKED_IN_TYPE = 'urn:pialy:problem:already-checked-in';
+const OTHER_DAY_TYPE = 'urn:pialy:problem:pass-other-day';
 
 const boardQuery = z.object({ date: z.string().optional() });
 const flagParams = z.object({ id: z.uuid() });
@@ -89,13 +91,15 @@ export const boardRoutes: FastifyPluginAsync<BoardRoutesOptions> = async (app, {
     const token = bookingTokenParam(request.params);
     if (token === null) return sendProblem(reply, HTTP_NOT_FOUND);
     try {
-      return { checkedInAt: await checkIn({ store: checkInStore, clock }, token) };
+      const business = await loadBusiness(db);
+      return { checkedInAt: await checkIn({ store: checkInStore, clock }, token, business.timezone) };
     } catch (error) {
       if (error instanceof BookingNotFoundError) return sendProblem(reply, HTTP_NOT_FOUND, 'No encontramos esa reserva');
       if (error instanceof BookingNotConfirmedError) {
         return sendProblem(reply, HTTP_CONFLICT, 'Anticipo no confirmado', NOT_CONFIRMED_TYPE);
       }
       if (error instanceof AlreadyCheckedInError) return sendAlreadyCheckedIn(reply, error.checkedInAt);
+      if (error instanceof PassNotForTodayError) return sendOtherDay(reply, error.slotStart);
       throw error;
     }
   });
@@ -129,4 +133,11 @@ function sendAlreadyCheckedIn(reply: FastifyReply, checkedInAt: Date): FastifyRe
     .status(HTTP_CONFLICT)
     .header('content-type', PROBLEM_CONTENT_TYPE)
     .send({ ...problem(HTTP_CONFLICT, 'Este pase ya se usó', ALREADY_CHECKED_IN_TYPE), checkedInAt });
+}
+
+function sendOtherDay(reply: FastifyReply, slotStart: Date): FastifyReply {
+  return reply
+    .status(HTTP_CONFLICT)
+    .header('content-type', PROBLEM_CONTENT_TYPE)
+    .send({ ...problem(HTTP_CONFLICT, 'Este pase es para otro día', OTHER_DAY_TYPE), slotStart });
 }

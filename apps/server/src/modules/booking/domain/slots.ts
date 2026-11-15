@@ -39,6 +39,7 @@ export class SlotNotOfferedError extends Error {
 
 const MS_PER_MINUTE = 60_000;
 const MINUTES_PER_HOUR = 60;
+const MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const WALL_TIME = /^([01]\d|2[0-3]):([0-5]\d)$/;
 const GMT_OFFSET = /^GMT(?:([+-])(\d{2}):(\d{2}))?$/;
@@ -75,6 +76,12 @@ export function bookableSlot(start: Date, business: BusinessConfig, tz: string, 
 export function localDateOf(instant: Date, tz: string): string {
   const parts = partsOf(dateFormatter(tz), instant);
   return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+/** The local calendar day that contains `instant`, as the half-open range `[midnight, next midnight)`. */
+export function localDayOf(instant: Date, tz: string): { readonly start: Date; readonly end: Date } {
+  const day = parseIsoDate(localDateOf(instant, tz));
+  return { start: zonedWallTimeToInstant(day, 0, tz), end: zonedWallTimeToInstant(day, MINUTES_PER_DAY, tz) };
 }
 
 /** Throws {@link InvalidDateError} unless `date` is a real `YYYY-MM-DD` calendar date. */

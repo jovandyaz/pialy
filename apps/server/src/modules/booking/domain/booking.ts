@@ -45,6 +45,15 @@ export class AlreadyCheckedInError extends Error {
   }
 }
 
+/** A confirmed pass presented on a local day other than its appointment's. */
+export class PassNotForTodayError extends Error {
+  override readonly name = 'PassNotForTodayError';
+
+  constructor(readonly slotStart: Date) {
+    super('the pass is for another day');
+  }
+}
+
 /** No open flag has the given id (it does not exist or was already resolved). */
 export class FlagNotFoundError extends Error {
   override readonly name = 'FlagNotFoundError';

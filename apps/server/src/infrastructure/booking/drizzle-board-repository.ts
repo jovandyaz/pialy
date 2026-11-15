@@ -10,6 +10,7 @@ import {
   BookingNotFoundError,
   BookingStatus,
   FlagNotFoundError,
+  PassNotForTodayError,
 } from '../../modules/booking/domain/booking.js';
 import type { Slot } from '../../modules/booking/domain/slots.js';
 import type { Db } from '../db/client.js';
@@ -218,18 +219,23 @@ function toBoardBooking(row: {
 
 export function createDrizzleCheckInStore(db: Db): CheckInStore {
   return {
-    checkIn(token, at) {
+    checkIn(token, at, day) {
       return sanitized(() =>
         db.transaction(async (tx) => {
           // One conditional UPDATE decides the race: only one caller sees the row still `confirmed`.
           const claimed = await changeBooking(
             tx,
-            and(eq(bookings.token, token), eq(bookings.status, BookingStatus.Confirmed)),
+            and(
+              eq(bookings.token, token),
+              eq(bookings.status, BookingStatus.Confirmed),
+              gte(bookings.slotStart, day.start),
+              lt(bookings.slotStart, day.end),
+            ),
             { status: BookingStatus.CheckedIn, checkedInAt: at },
           );
           if (claimed === 1) return at;
           const [existing] = await tx
-            .select({ status: bookings.status, checkedInAt: bookings.checkedInAt })
+            .select({ status: bookings.status, checkedInAt: bookings.checkedInAt, slotStart: bookings.slotStart })
             .from(bookings)
             .where(eq(bookings.token, token))
             .limit(1);
@@ -237,6 +243,7 @@ export function createDrizzleCheckInStore(db: Db): CheckInStore {
           if (existing.status === BookingStatus.CheckedIn && existing.checkedInAt !== null) {
             throw new AlreadyCheckedInError(existing.checkedInAt);
           }
+          if (existing.status === BookingStatus.Confirmed) throw new PassNotForTodayError(existing.slotStart);
           throw new BookingNotConfirmedError();
         }),
       );
