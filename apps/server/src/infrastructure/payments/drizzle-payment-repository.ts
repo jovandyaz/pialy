@@ -120,15 +120,25 @@ function lookupCondition(lookup: AttemptLookup): SQL | null {
   return UUID.test(lookup.attemptId) ? eq(paymentAttempts.id, lookup.attemptId) : null;
 }
 
+/** Locks the intent row until the transaction ends; take it before any booking row of the intent. */
+export async function lockIntent(tx: DbTx, intentId: string): Promise<PaymentIntent | null> {
+  const [row] = await tx.select().from(paymentIntents).where(eq(paymentIntents.id, intentId)).for('update');
+  return row === undefined ? null : toIntent(row);
+}
+
+function toIntent(intent: IntentRow): PaymentIntent {
+  return {
+    id: intent.id,
+    reference: intent.reference,
+    amount: toMoney(intent.amountMinor, intent.currency),
+    status: oneOf(IntentStatus, intent.status, 'intent status'),
+    succeededAt: intent.succeededAt,
+  };
+}
+
 function toMatch(intent: IntentRow, attempt: AttemptRow): AttemptMatch {
   return {
-    intent: {
-      id: intent.id,
-      reference: intent.reference,
-      amount: toMoney(intent.amountMinor, intent.currency),
-      status: oneOf(IntentStatus, intent.status, 'intent status'),
-      succeededAt: intent.succeededAt,
-    } satisfies PaymentIntent,
+    intent: toIntent(intent),
     attempt: {
       id: attempt.id,
       intentId: attempt.intentId,

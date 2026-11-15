@@ -9,9 +9,13 @@ import {
   IdempotencyKeyReusedError,
   holdSlotAndCharge,
 } from '../../modules/booking/application/hold-slot.js';
+import { startQrAttempt } from '../../modules/booking/application/start-qr-attempt.js';
 import {
   ActiveHoldExistsError,
+  BookingNotFoundError,
+  BookingNotHoldingError,
   SlotTakenError,
+  TooManyAttemptsError,
   TooManyHoldsForPhoneError,
 } from '../../modules/booking/domain/booking.js';
 import { InvalidPhoneError } from '../../modules/booking/domain/phone.js';
@@ -22,6 +26,7 @@ import {
   loadBusiness,
 } from '../../infrastructure/booking/booking-read-model.js';
 import { createDrizzleHoldRepository } from '../../infrastructure/booking/drizzle-booking-repository.js';
+import { createDrizzleQrAttemptRepository } from '../../infrastructure/booking/drizzle-qr-attempt-repository.js';
 import type { Db } from '../../infrastructure/db/client.js';
 import { bookingTokenParam } from '../booking-token.js';
 import { PROBLEM_CONTENT_TYPE, sendProblem } from '../problem.js';
@@ -50,6 +55,7 @@ const HTTP_CREATED = 201;
 const HOLDS_PER_IP = { max: 10, timeWindow: 10 * 60_000 } as const;
 const IP_LIMIT_DETAIL = 'Demasiados intentos. Espera unos minutos.';
 const DATE_FORMAT_DETAIL = 'Indica la fecha como AAAA-MM-DD';
+const IDEMPOTENCY_KEY_DETAIL = 'Envía un encabezado Idempotency-Key con un UUID';
 
 const slotsQuery = z.object({ date: z.string() });
 const holdBody = z.strictObject({
@@ -98,12 +104,33 @@ const problems: readonly (readonly [new (...args: never[]) => Error, DomainProbl
     ActiveHoldExistsError,
     { status: HTTP_CONFLICT, type: 'urn:pialy:problem:active-hold-exists', detail: 'Ya tienes un apartado en curso' },
   ],
+  [
+    BookingNotFoundError,
+    { status: HTTP_NOT_FOUND, type: 'urn:pialy:problem:booking-not-found', detail: 'No encontramos esa reserva' },
+  ],
+  [
+    BookingNotHoldingError,
+    {
+      status: HTTP_CONFLICT,
+      type: 'urn:pialy:problem:booking-not-holding',
+      detail: 'Esta reserva ya no está esperando el pago',
+    },
+  ],
+  [
+    TooManyAttemptsError,
+    {
+      status: HTTP_TOO_MANY_REQUESTS,
+      type: 'urn:pialy:problem:attempts-exhausted',
+      detail: 'Alcanzaste el máximo de intentos',
+    },
+  ],
 ];
 
 /** Public booking API. The phone the customer types is never logged or stored, only its last 4 digits and hash. */
 export const bookingRoutes: FastifyPluginAsync<BookingRoutesOptions> = async (app, options) => {
   const { db, connector, clock, deposit, phoneHashSalt } = options;
   const holds = createDrizzleHoldRepository(db);
+  const qrAttempts = createDrizzleQrAttemptRepository(db);
   const activeBookings = createDrizzleActiveBookingsReader(db);
   await app.register(rateLimit, {
     global: false,
@@ -127,7 +154,7 @@ export const bookingRoutes: FastifyPluginAsync<BookingRoutesOptions> = async (ap
 
   app.post('/api/bookings', { config: { rateLimit: HOLDS_PER_IP } }, async (request, reply) => {
     const key = acceptedIdempotencyKey(request.headers['idempotency-key']);
-    if (key === null) return sendProblem(reply, HTTP_BAD_REQUEST, 'Envía un encabezado Idempotency-Key con un UUID');
+    if (key === null) return sendProblem(reply, HTTP_BAD_REQUEST, IDEMPOTENCY_KEY_DETAIL);
     const body = holdBody.safeParse(request.body);
     if (!body.success) return sendProblem(reply, HTTP_BAD_REQUEST, 'Revisa los datos de la reserva');
 
@@ -142,8 +169,24 @@ export const bookingRoutes: FastifyPluginAsync<BookingRoutesOptions> = async (ap
           idempotencyKey: key,
         },
       );
-      if (response.status !== HTTP_CREATED) reply.header('content-type', PROBLEM_CONTENT_TYPE);
-      return reply.status(response.status).send(response.body);
+      return sendStored(reply, response);
+    } catch (error) {
+      return sendDomainProblem(reply, error);
+    }
+  });
+
+  app.post('/api/bookings/:token/qr', async (request, reply) => {
+    const token = bookingTokenParam(request.params);
+    if (token === null) return sendProblem(reply, HTTP_NOT_FOUND);
+    const key = acceptedIdempotencyKey(request.headers['idempotency-key']);
+    if (key === null) return sendProblem(reply, HTTP_BAD_REQUEST, IDEMPOTENCY_KEY_DETAIL);
+
+    try {
+      const response = await startQrAttempt(
+        { attempts: qrAttempts, rail: connector, clock, deposit, log: request.log },
+        { token, idempotencyKey: key },
+      );
+      return sendStored(reply, response);
     } catch (error) {
       return sendDomainProblem(reply, error);
     }
@@ -172,6 +215,12 @@ function acceptedIdempotencyKey(header: string | string[] | undefined): string |
   if (typeof header !== 'string') return null;
   const key = QUOTED.exec(header)?.[1] ?? header;
   return IDEMPOTENCY_KEY.test(key) ? key : null;
+}
+
+/** Sends a response stored on an idempotency key; anything but 201 is a problem document. */
+function sendStored(reply: FastifyReply, response: { readonly status: number; readonly body: unknown }): FastifyReply {
+  if (response.status !== HTTP_CREATED) reply.header('content-type', PROBLEM_CONTENT_TYPE);
+  return reply.status(response.status).send(response.body);
 }
 
 function sendDomainProblem(reply: FastifyReply, error: unknown): FastifyReply {

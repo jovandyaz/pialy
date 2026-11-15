@@ -17,7 +17,8 @@ import { bookableSlot, type Slot } from '../domain/slots.js';
 import type { BookableBusiness } from './business.js';
 
 export const HOLD_SCOPE = 'hold';
-export const PUSH_CONCEPT = 'Anticipo Estudio Demo';
+/** What the payer's bank shows for the deposit, on a push and on a QR alike. */
+export const DEPOSIT_CONCEPT = 'Anticipo Estudio Demo';
 export const PUSH_FAILED_DETAIL = 'No pudimos enviar la solicitud. Intenta de nuevo o paga con QR.';
 export const PUSH_FAILED_TYPE = 'urn:pialy:problem:push-failed';
 
@@ -247,29 +248,33 @@ async function sendPush(deps: HoldSlotDeps, hold: HoldRef, bookingNumber: number
     charge = await deps.rail.createPushCharge({
       amount: deps.deposit,
       phone10,
-      concept: PUSH_CONCEPT,
+      concept: DEPOSIT_CONCEPT,
       expiresInSec: HOLD_SECONDS,
       numRef: String(bookingNumber),
       metadata: { bookingId: hold.bookingId, attemptId: hold.attemptId },
     });
   } catch (error) {
     // The call may have reached the bank, so pushing again could charge twice: the hold ends here.
-    logPushFailure(deps.log, hold, error);
+    logRailFailure(deps.log, { bookingId: hold.bookingId, attemptId: hold.attemptId }, error, 'codi push');
     return deps.holds.failPush(hold, PUSH_FAILED);
   }
   return deps.holds.recordPush(hold, charge);
 }
 
-function logPushFailure(log: HoldLogger, hold: HoldRef, error: unknown): void {
-  const ids = { bookingId: hold.bookingId, attemptId: hold.attemptId };
+/** Logs `${call} failed` with the ids; never a provider message or raw error text, which can echo what we sent. */
+export function logRailFailure(
+  log: HoldLogger,
+  ids: Readonly<Record<string, string>>,
+  error: unknown,
+  call: string,
+): void {
   if (error instanceof RailRejectedError) {
-    // The provider's message can echo the phone we sent, so only its structured fields are logged.
     const { name, status, providerCode, requestId } = error;
-    log.warn({ ...ids, rail: { name, status, providerCode, requestId } }, 'codi push failed');
+    log.warn({ ...ids, rail: { name, status, providerCode, requestId } }, `${call} failed`);
   } else if (error instanceof RailUnavailableError) {
-    log.warn({ ...ids, rail: { name: error.name, status: error.status } }, 'codi push failed');
+    log.warn({ ...ids, rail: { name: error.name, status: error.status } }, `${call} failed`);
   } else {
-    log.error({ ...ids, failure: scrubbed(error) }, 'codi push failed unexpectedly');
+    log.error({ ...ids, failure: scrubbed(error) }, `${call} failed unexpectedly`);
   }
 }
 

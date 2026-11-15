@@ -307,14 +307,14 @@ function slotLockKey(resourceId: SQL | typeof bookings.resourceId): SQL {
   return sql`hashtextextended('booking-slots:' || ${resourceId}::text, 0)`;
 }
 
-function bookingIn(bookingId: string, status: BookingStatus): SQL | undefined {
+export function bookingIn(bookingId: string, status: BookingStatus): SQL | undefined {
   return and(eq(bookings.id, bookingId), eq(bookings.status, status));
 }
 
 type BookingChange = Pick<typeof bookings.$inferInsert, 'status' | 'confirmedAt' | 'late'>;
 
 /** Every booking status change is announced to the board and to the booking's page in the same transaction. */
-async function changeBooking(tx: DbTx, where: SQL | undefined, change: BookingChange): Promise<number> {
+export async function changeBooking(tx: DbTx, where: SQL | undefined, change: BookingChange): Promise<number> {
   const changed = await tx
     .update(bookings)
     .set(change)
@@ -329,7 +329,7 @@ async function changeOneBooking(tx: DbTx, where: SQL | undefined, change: Bookin
   if (count !== 1) throw new Error(`expected to change one booking, changed ${count}`);
 }
 
-function bookingUpdated(booking: { token: string; status: string; late: boolean }): OutboxMessage[] {
+export function bookingUpdated(booking: { token: string; status: string; late: boolean }): OutboxMessage[] {
   const payload = { type: BOOKING_UPDATED, token: booking.token, status: booking.status, late: booking.late };
   return [
     { topic: BOARD_TOPIC, payload },

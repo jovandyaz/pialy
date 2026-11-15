@@ -15,6 +15,36 @@ export const HOLD_SECONDS = 360;
 /** Each hold sends a real CoDi push to the number typed, so one phone gets few of them. */
 export const PHONE_HOLD_LIMIT = { maxHolds: 3, windowMinutes: 10 } as const;
 
+/** Rail calls one booking may make, the push included; failed calls count too. */
+export const MAX_ATTEMPTS_PER_BOOKING = 3;
+
+/** No booking has the given token. */
+export class BookingNotFoundError extends Error {
+  override readonly name = 'BookingNotFoundError';
+
+  constructor() {
+    super('no booking has this token');
+  }
+}
+
+/** The booking no longer waits for its deposit, so it takes no new payment attempt. */
+export class BookingNotHoldingError extends Error {
+  override readonly name = 'BookingNotHoldingError';
+
+  constructor() {
+    super('the booking is not holding its slot');
+  }
+}
+
+/** The booking already used its {@link MAX_ATTEMPTS_PER_BOOKING} attempts. */
+export class TooManyAttemptsError extends Error {
+  override readonly name = 'TooManyAttemptsError';
+
+  constructor() {
+    super('the booking has no payment attempts left');
+  }
+}
+
 /** Another active booking already covers the slot. */
 export class SlotTakenError extends Error {
   override readonly name = 'SlotTakenError';
