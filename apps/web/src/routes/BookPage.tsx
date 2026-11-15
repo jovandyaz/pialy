@@ -240,7 +240,7 @@ function HoldSheet({ slot, onSlotTaken }: { readonly slot: SlotItem; readonly on
         </div>
         <Field
           label="Tu celular (ahí te llega la solicitud de pago)"
-          hint="Solo lo usamos para enviarte este cobro. Guardamos los últimos 4 dígitos."
+          hint="Debe estar registrado en CoDi en la app de tu banco. Solo lo usamos para este cobro y guardamos los últimos 4 dígitos."
           error={phoneError}
         >
           {({ inputId, describedBy }) => (

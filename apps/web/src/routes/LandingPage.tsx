@@ -149,7 +149,7 @@ function Hero({ loop }: { readonly loop: SlotLoop }) {
           <LiveSlotCard loop={loop} example={example} className="mt-5 lg:hidden" />
           <div className="mt-5 flex flex-col gap-2 sm:max-w-sm lg:mt-8">
             <DemoCta />
-            <p className="text-center text-[13px] text-muted sm:text-left">La demo cobra $0.01 real desde tu banco y no se devuelve.</p>
+            <p className="text-center text-[13px] text-muted sm:text-left">La demo cobra $0.01 real desde tu banco y no se devuelve. Antes de probar, registra tu celular en CoDi en la app de tu banco.</p>
             <AgendaLink className="justify-center gap-1.5 text-[15px] sm:justify-start">
               Entrar a tu agenda <span className="font-semibold text-muted no-underline">(pide PIN)</span>
             </AgendaLink>
