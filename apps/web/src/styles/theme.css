@@ -1,0 +1,104 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/archivo/wdth.css';
+@import '@fontsource/doto/latin-900.css';
+
+/* Minimal design system: only the Pialy tokens, ported from the approved mockup's :root. */
+@theme {
+  --color-*: initial;
+  --font-*: initial;
+  --radius-*: initial;
+
+  --color-ink: #0b0d12;
+  --color-paper: #ffffff;
+  --color-muted: #4f586b;
+  --color-grid: #d6deff;
+  --color-brand: #2448f5;
+  --color-brand-wash: #e9eeff;
+  --color-paid: #0a7a3b;
+  --color-paid-wash: #e2f6ea;
+  --color-late: #9a4a00;
+  --color-late-wash: #fff0d9;
+  --color-gone: #8a91a1;
+
+  --font-ui: 'Archivo Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-display: 'Doto', ui-monospace, monospace;
+
+  --radius-sm: 2px;
+
+  --animate-pulse-ring: pulse-ring 1.6s ease-out infinite;
+  --animate-sweep: sweep 0.9s cubic-bezier(0.16, 1, 0.3, 1) both;
+  --animate-rise: rise 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+
+  @keyframes pulse-ring {
+    0% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-brand) 45%, transparent);
+    }
+    100% {
+      box-shadow: 0 0 0 10px color-mix(in srgb, var(--color-brand) 0%, transparent);
+    }
+  }
+  @keyframes sweep {
+    from {
+      clip-path: inset(0 100% 0 0);
+    }
+    to {
+      clip-path: inset(0 0 0 0);
+    }
+  }
+  @keyframes rise {
+    from {
+      transform: translateY(16px);
+      opacity: 0;
+    }
+    to {
+      transform: none;
+      opacity: 1;
+    }
+  }
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-paper font-ui text-ink antialiased;
+    font-size: 17px;
+    line-height: 1.4;
+  }
+  :focus-visible {
+    outline: 3px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+  dialog::backdrop {
+    background: color-mix(in srgb, var(--color-ink) 55%, transparent);
+  }
+}
+
+@layer components {
+  /* The visible Retícula: a pale 32px grid behind the booking screen. */
+  .grid-bg {
+    background-image:
+      linear-gradient(var(--color-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--color-grid) 1px, transparent 1px);
+    background-size: 32px 32px;
+    background-position: -1px -1px;
+  }
+  /* A slot someone already paid: hatched, never clickable. */
+  .hatched {
+    background: repeating-linear-gradient(
+      135deg,
+      var(--color-paper) 0 6px,
+      color-mix(in srgb, var(--color-ink) 10%, var(--color-paper)) 6px 7px
+    );
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
+}
