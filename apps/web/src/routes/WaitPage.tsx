@@ -60,6 +60,7 @@ export function WaitPage({ token }: { readonly token: string }) {
 
   useEffect(() => refetch(), [refetch]);
   useEventStream(API_PATH.bookingEvents(token), refetch);
+  useDocumentTitle(waitTitle(booking));
 
   if (booking.kind === REMOTE.loading) {
     return (
@@ -87,8 +88,22 @@ export function WaitPage({ token }: { readonly token: string }) {
   return <Waiting booking={booking.data} />;
 }
 
+const TITLE = {
+  loading: 'Tu reserva',
+  missing: 'Reserva no encontrada',
+  pass: 'Tu pase',
+  waiting: 'Esperando tu banco',
+  released: 'Horario liberado',
+} as const;
+
+function waitTitle(booking: Remote<BookingView>): string {
+  if (booking.kind === REMOTE.loading) return TITLE.loading;
+  if (booking.kind === REMOTE.error) return TITLE.missing;
+  if (isPaid(booking.data.status)) return TITLE.pass;
+  return booking.data.status === STATUS.holding ? TITLE.waiting : TITLE.released;
+}
+
 function Waiting({ booking }: { readonly booking: BookingView }) {
-  useDocumentTitle('Esperando tu banco');
   const countdown = useHoldCountdown(booking.holdExpiresAt);
   const isDesktop = useIsDesktop();
   const elapsedMs = HOLD_MS - countdown.remainingMs;
@@ -217,7 +232,6 @@ function QrOffer({ attempt }: { readonly attempt: QrAttempt }) {
 }
 
 function Released({ booking }: { readonly booking: BookingView }) {
-  useDocumentTitle('Horario liberado');
   return (
     <Screen>
       <TopBar title={BUSINESS.name} />
