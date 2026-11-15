@@ -651,7 +651,7 @@ function SiteFooter() {
         <Numeral size="sheet" tone="brand" className="text-[48px] leading-[0.8]">
           pialy
         </Numeral>
-        <p className="text-[15px] font-bold sm:flex-1">Tu lugar, guardado al instante.</p>
+        <p className="text-[15px] font-bold sm:flex-1">Citas con anticipo para tu negocio.</p>
         <p className="text-sm text-muted">© 2026 Pialy</p>
       </div>
     </footer>
