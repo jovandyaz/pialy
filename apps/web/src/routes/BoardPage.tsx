@@ -199,7 +199,7 @@ export function BoardPage() {
         </>
       )}
 
-      <div className="sticky bottom-0 z-10 mt-auto border-t-2 border-ink bg-paper px-5 pt-3 pb-4.5">
+      <div className="sticky bottom-0 z-10 mt-auto border-t-2 border-ink bg-paper px-5 pt-3 pb-[max(1.125rem,env(safe-area-inset-bottom))]">
         <div role="status" aria-live="polite" className="pointer-events-none absolute inset-x-4 bottom-full mb-3">
           {toast === null ? null : (
             <div className="flex animate-rise items-center gap-3 rounded-sm bg-paid px-4 py-3.5 font-bold text-paper">
