@@ -18,7 +18,7 @@ El servidor es el único que habla con pey (`packages/connector-pey`):
 Confirmación del pago:
 
 - **Webhook firmado** en `POST /api/webhooks/pey`: firma Standard Webhooks verificada sobre el cuerpo crudo (401 si no es válida); cada `webhook-id` se registra en una bandeja de entrada en la misma transacción que su efecto, así que un webhook repetido no hace nada. El mismo pago tampoco se aplica dos veces aunque llegue por webhook y por consulta.
-- **Barrido cada 15 s** (con candado de Postgres para una sola instancia activa): antes de liberar un apartado vencido consulta a pey; si está pagado lo aplica, si no lo vence y libera el horario. Cada cuarto barrido revisa también los intentos vencidos en los últimos 30 min, por si el pago llegó tarde.
+- **Barrido cada 15 s** (con candado de Postgres para una sola instancia activa): antes de liberar un apartado vencido consulta a pey; si está pagado lo aplica, si no lo vence y libera el horario. Cada cuarto barrido revisa también los intentos vencidos en los últimos 40 min, por si el pago llegó tarde.
 
 Política de pagos:
 
@@ -48,29 +48,31 @@ Celular del dueño ───┤ HTTP + SSE              │
 
 ## Correrlo
 
-Requisitos: Node 24 (`.nvmrc`), pnpm y Docker (para la base de pruebas).
+Requisitos: Node 24 (`.nvmrc`), pnpm y Docker (Postgres local).
 
 ```sh
 pnpm install
-cp .env.example .env   # completa los valores
+cp .env.example .env   # completa los secretos
+docker compose -f docker-compose.test.yml up -d
 pnpm -r build
-node apps/server/dist/migrate.js && node apps/server/dist/seed.js && node apps/server/dist/main.js
+node --env-file=.env apps/server/dist/migrate.js && node --env-file=.env apps/server/dist/seed.js && node --env-file=.env apps/server/dist/main.js
 ```
 
-Variables de entorno (`.env.example`):
+El `DATABASE_URL` de `.env.example` apunta a la base de pruebas de Docker; `pnpm test` la vacía.
+
+Variables de entorno (`.env.example`). El servidor no arranca sin `DATABASE_URL`, `PEY_API_KEY`, `PEY_BASE_URL`, `PEY_WEBHOOK_SECRET`, `PHONE_HASH_SALT`, `BUSINESS_PIN` y `COOKIE_SECRET`, en cualquier entorno.
 
 | Variable | Para qué |
 |---|---|
-| `NODE_ENV` | `development`, `test` o `production`; en producción todas las de abajo son obligatorias. |
+| `NODE_ENV` | `development`, `test` o `production`. |
 | `PORT` | Puerto HTTP (3000 por defecto). |
 | `DATABASE_URL` | Conexión a Postgres. |
 | `PEY_API_KEY` | Llave de la API de pey. |
-| `PEY_BASE_URL` | URL base de la API de pey. |
+| `PEY_BASE_URL` | URL base de la API de pey (`https://api.pey.mx`). |
 | `PEY_WEBHOOK_SECRET` | Secreto para verificar la firma de los webhooks de pey. |
 | `BUSINESS_PIN` | PIN del tablero del negocio (6 dígitos o más). |
 | `COOKIE_SECRET` | Firma la cookie de sesión del dueño (32 caracteres o más). |
 | `PHONE_HASH_SALT` | Sal del hash del celular (límites por número). |
-| `PUBLIC_BASE_URL` | URL pública del servicio. |
 | `DEMO_DEPOSIT_CENTS` | Monto del anticipo en centavos; solo acepta `1`. |
 | `WEB_ROOT` | Carpeta de la SPA compilada (por defecto `apps/web/dist`). |
 
@@ -86,6 +88,7 @@ pnpm lint
 ## Privacidad
 
 - Del celular solo se guardan los últimos 4 dígitos y un hash con sal; el número completo nunca se guarda ni se registra en logs.
+- De la cuenta del pagador (CLABE) solo se guardan los últimos 4 dígitos, y los logs muestran los tokens de reserva recortados.
 - El monto lo fija el servidor; ninguna solicitud del cliente lleva monto.
 - El cliente nunca confirma un pago: solo el webhook verificado o la consulta a pey lo hacen.
 
@@ -103,4 +106,4 @@ Ninguno.
 
 ## Licencia
 
-Functional Source License 1.1 con licencia futura MIT (FSL-1.1-MIT). Ver `LICENSE`.
+Functional Source License 1.1 con licencia futura MIT (FSL-1.1-MIT). Ver `LICENSE.md`.
