@@ -10,6 +10,7 @@ import { Sheet } from '../components/ui/Sheet';
 import { BUSINESS } from '../lib/business';
 import { cn } from '../lib/cn';
 import { shouldKeepKey, useIdempotencyKey } from '../lib/idempotency';
+import { lastHold, rememberHold } from '../lib/last-hold';
 import { isCompletePhone, phoneDigits } from '../lib/phone';
 import { errorDetail, failed, loading, ready, REMOTE, type Remote } from '../lib/remote';
 import { navigate, ROUTES, useDocumentTitle } from '../lib/router';
@@ -20,6 +21,7 @@ const DAYS_SHOWN = 5;
 const DEFAULT_SERVICE_MINUTES = 45;
 const CUSTOMER_NAME_MAX_LENGTH = 80;
 const SLOT_TAKEN_TYPE = 'urn:pialy:problem:slot-taken';
+const ACTIVE_HOLD_TYPE = 'urn:pialy:problem:active-hold-exists';
 
 type Slots = readonly SlotItem[];
 
@@ -197,6 +199,7 @@ function HoldSheet({ slot, onSlotTaken }: { readonly slot: SlotItem; readonly on
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [activeHold, setActiveHold] = useState<string | null>(null);
   const idempotency = useIdempotencyKey();
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -208,20 +211,23 @@ function HoldSheet({ slot, onSlotTaken }: { readonly slot: SlotItem; readonly on
     }
     setPhoneError(null);
     setError(null);
+    setActiveHold(null);
     setPending(true);
     const customerName = name.trim();
     const body = { slotStart: slot.start, phone: phoneDigits(phone), ...(customerName === '' ? {} : { customerName }) };
     try {
       const hold = await api.hold(body, idempotency.keyFor(JSON.stringify(body)));
       idempotency.reset();
+      rememberHold(hold.token);
       navigate(ROUTES.booking(hold.token));
     } catch (failure) {
       setPending(false);
       if (!shouldKeepKey(failure)) idempotency.reset();
       setError(errorDetail(failure));
-      if (failure instanceof ApiError && failure.status === HTTP_CONFLICT && failure.problem?.['type'] === SLOT_TAKEN_TYPE) {
-        onSlotTaken();
-      }
+      const conflict = failure instanceof ApiError && failure.status === HTTP_CONFLICT ? failure.problem?.['type'] : undefined;
+      if (conflict === SLOT_TAKEN_TYPE) onSlotTaken();
+      // The server never names the other hold (a phone number proves nothing), so only this tab's own can be offered.
+      if (conflict === ACTIVE_HOLD_TYPE) setActiveHold(lastHold());
     }
   }
 
@@ -254,6 +260,11 @@ function HoldSheet({ slot, onSlotTaken }: { readonly slot: SlotItem; readonly on
           )}
         </Field>
         {error === null ? null : <ErrorNote>{error}</ErrorNote>}
+        {activeHold === null ? null : (
+          <Button variant="ghost" size="md" className="mt-3" onClick={() => navigate(ROUTES.booking(activeHold))}>
+            Ver mi apartado
+          </Button>
+        )}
         <Button type="submit" className="mt-3.5" disabled={pending}>
           <PhoneIcon />
           {pending ? 'Enviando a tu banco…' : 'Enviar solicitud a mi banco'}

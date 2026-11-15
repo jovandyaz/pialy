@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, type SlotItem } from '../api';
+import { api, ApiError, type SlotItem } from '../api';
+import { lastHold, rememberHold } from '../lib/last-hold';
 import { nextDays } from '../lib/time';
 import { BookPage } from './BookPage';
 
@@ -67,5 +68,66 @@ describe('BookPage default day', () => {
     fireEvent.click(dayButtons[1] as HTMLButtonElement);
     await screen.findByText('Ocupado');
     await waitFor(() => expect(pressedDay()).toContain(String(Number(tomorrow.slice(8)))));
+  });
+});
+
+describe('BookPage hold already in progress', () => {
+  const ACTIVE_HOLD = new ApiError(409, 'Ya tienes un apartado en curso', {
+    type: 'urn:pialy:problem:active-hold-exists',
+    status: 409,
+    detail: 'Ya tienes un apartado en curso',
+  });
+
+  beforeEach(() => {
+    // jsdom has <dialog> but not its show(); the hold sheet opens with it.
+    HTMLDialogElement.prototype.show = function show(this: HTMLDialogElement) {
+      this.setAttribute('open', '');
+    };
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(NOW);
+    window.sessionStorage.clear();
+    window.history.replaceState(null, '', '/estudio-demo');
+  });
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  async function submitHold(): Promise<void> {
+    const [today] = DAYS as [string];
+    mockSlots({ [today]: 'free' });
+    render(<BookPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /Libre/ }));
+    fireEvent.change(screen.getByLabelText(/Tu celular/), { target: { value: '5512345678' } });
+    fireEvent.click(screen.getByRole('button', { name: /Enviar solicitud/ }));
+  }
+
+  it('links back to the hold this tab made when the phone already has one', async () => {
+    rememberHold('tok_previous_hold_0001');
+    vi.spyOn(api, 'hold').mockRejectedValue(ACTIVE_HOLD);
+
+    await submitHold();
+    fireEvent.click(await screen.findByRole('button', { name: 'Ver mi apartado' }));
+
+    expect(window.location.pathname).toBe('/c/tok_previous_hold_0001');
+  });
+
+  it('shows only the message when this tab made no hold', async () => {
+    vi.spyOn(api, 'hold').mockRejectedValue(ACTIVE_HOLD);
+
+    await submitHold();
+
+    await screen.findByText('Ya tienes un apartado en curso');
+    expect(screen.queryByRole('button', { name: 'Ver mi apartado' })).toBeNull();
+  });
+
+  it('remembers the hold it makes', async () => {
+    vi.spyOn(api, 'hold').mockResolvedValue({ token: 'tok_new_hold_000001', holdExpiresAt: '2026-11-16T00:06:00.000Z' });
+
+    await submitHold();
+
+    await waitFor(() => expect(window.location.pathname).toBe('/c/tok_new_hold_000001'));
+    expect(lastHold()).toBe('tok_new_hold_000001');
   });
 });
