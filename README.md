@@ -4,7 +4,7 @@ Tu lugar, guardado al instante.
 
 ## Qué es
 
-Un negocio que trabaja con citas pide un anticipo de $0.01 MXN con CoDi para apartar un horario. El horario queda apartado mientras vive la solicitud de cobro y se confirma solo cuando el banco confirma el pago; el cliente recibe un pase que el negocio verifica una sola vez.
+Un negocio que trabaja con citas pide un anticipo con CoDi para apartar un horario. El horario queda apartado mientras vive la solicitud de cobro y se confirma solo cuando el banco confirma el pago; el cliente recibe un pase que el negocio verifica una sola vez. La demo cobra un anticipo fijo de $0.01 MXN.
 
 ## Cómo usa CoDi (vía pey)
 
@@ -24,8 +24,8 @@ Política de pagos:
 
 - Pago mientras el horario sigue apartado: se confirma.
 - Pago tardío: si el horario sigue libre se confirma marcado como tardío; si ya lo tomó otra persona, queda una devolución pendiente.
-- Pago repetido, sobre una cita ya pagada o cancelada, o sin reserva: devolución pendiente visible en el tablero del negocio.
-- Las devoluciones se hacen a mano por SPEI y se registran con una nota en el tablero.
+- Pago repetido, sobre una cita ya pagada o cancelada, o sin reserva: devolución pendiente visible en la agenda del negocio.
+- Las devoluciones se hacen a mano por SPEI y se registran con una nota en la agenda.
 
 ## Arquitectura
 
@@ -43,8 +43,8 @@ Celular del dueño ───┤ HTTP + SSE              │
 
 - `packages/payments`: dominio de pagos sin I/O (intención de pago, intentos, dinero, máquina de estados, puertos).
 - `packages/connector-pey`: implementa el conector de pey (cliente HTTP, validación con Zod, firma de webhooks).
-- `apps/server`: Fastify; reservas, sesión del dueño, tablero, webhook, barrido, outbox y SSE; Drizzle sobre Postgres. Sirve la SPA compilada.
-- `apps/web`: SPA en React + Vite (reservar, esperar el pago, pase, tablero, verificar pase).
+- `apps/server`: Fastify; reservas, sesión del dueño, agenda, webhook, barrido, outbox y SSE; Drizzle sobre Postgres. Sirve la SPA compilada.
+- `apps/web`: SPA en React + Vite (reservar, esperar el pago, pase, agenda, verificar pase).
 
 ## Correrlo
 
@@ -70,7 +70,7 @@ Variables de entorno (`.env.example`). El servidor no arranca sin `DATABASE_URL`
 | `PEY_API_KEY` | Llave de la API de pey. |
 | `PEY_BASE_URL` | URL base de la API de pey (`https://api.pey.mx`). |
 | `PEY_WEBHOOK_SECRET` | Secreto para verificar la firma de los webhooks de pey. |
-| `BUSINESS_PIN` | PIN del tablero del negocio (6 dígitos o más). |
+| `BUSINESS_PIN` | PIN dla agenda del negocio (6 dígitos o más). |
 | `COOKIE_SECRET` | Firma la cookie de sesión del dueño (32 caracteres o más). |
 | `PHONE_HASH_SALT` | Sal del hash del celular (límites por número). |
 | `DEMO_DEPOSIT_CENTS` | Monto del anticipo en centavos; solo acepta `1`. |
@@ -97,7 +97,7 @@ pnpm lint
 - Un solo negocio.
 - Las devoluciones son manuales por SPEI.
 - Cerrar sesión solo borra la cookie del dueño; la sesión dura 12 h.
-- Tras 20 PIN incorrectos en 10 min (de cualquier origen) nadie puede entrar al tablero durante esa ventana.
+- Tras 20 PIN incorrectos en 10 min (de cualquier origen) nadie puede entrar a la agenda durante esa ventana.
 - Alguien que escriba el celular de otra persona puede impedirle apartar con ese número hasta por 10 min.
 
 ## Componentes previos
