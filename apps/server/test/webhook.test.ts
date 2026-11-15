@@ -502,7 +502,8 @@ describe('applying a payment concurrently', () => {
     expect(outcomes).toEqual(['applied', 'applied']);
     expect(seen.sort()).toEqual(['DuplicatePaymentReceived', 'PaymentSucceeded']);
     expect(await db.select().from(paymentEvents)).toHaveLength(2);
-    expect(await db.select().from(outbox)).toHaveLength(2);
+    const notices = (await db.select().from(outbox)).map((row) => `${row.topic} ${String((row.payload as { type: string }).type)}`);
+    expect(notices.sort()).toEqual(['board booking.updated', 'board flag.raised', `booking:${f.token} booking.updated`]);
   });
 
   it('records an unmatched payment once when two deliveries race', async () => {

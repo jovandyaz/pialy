@@ -76,6 +76,13 @@ function okPush(): ReturnType<typeof vi.fn<PushCharge>> {
 
 const log = { warn: vi.fn(), error: vi.fn() };
 
+const FLAG_RAISED = { topic: 'board', payload: { type: 'flag.raised' } };
+
+/** Outbox rows as topic and payload, to compare without ids and timestamps. */
+async function boardNotices(): Promise<{ topic: string; payload: unknown }[]> {
+  return (await db.select().from(outbox)).map(({ topic, payload }) => ({ topic, payload }));
+}
+
 async function deps(push: PushCharge, overrides: Partial<HoldSlotDeps> = {}): Promise<HoldSlotDeps> {
   await seedDemo(db);
   return {
@@ -530,7 +537,7 @@ describe('onPaymentEvent', () => {
     expect(await db.select().from(paymentIntents).where(eq(paymentIntents.id, late!.intentId!))).toEqual([
       expect.objectContaining({ status: 'succeeded' }),
     ]);
-    expect(await db.select().from(outbox)).toEqual([]);
+    expect(await boardNotices()).toEqual([FLAG_RAISED]);
   });
 
   it.each(['processing', 'canceled'])(
@@ -567,7 +574,7 @@ describe('onPaymentEvent', () => {
     const [flag] = await db.select().from(flags);
     expect(flag).toMatchObject({ kind: 'refund_due' });
     expect(flag?.payload).toMatchObject({ reason: 'duplicate_payment', providerTxId: 'TX_SECOND' });
-    expect(await db.select().from(outbox)).toEqual([]);
+    expect(await boardNotices()).toEqual([FLAG_RAISED]);
   });
 
   it.each([
@@ -595,12 +602,27 @@ describe('onPaymentEvent', () => {
     expect(await db.select().from(outbox)).toHaveLength(rows);
   });
 
-  it('keeps flagging unmatched payments', async () => {
+  it('keeps flagging unmatched payments, and tells the board without any customer data', async () => {
     expect(
       await applyProviderPayment(uow(), noRail, { ...paymentFor(randomUUID()), providerTxId: 'TX_NOBODY' }, 'reconcile', {}),
     ).toBe('unmatched');
 
     expect(await db.select().from(flags)).toEqual([expect.objectContaining({ kind: 'unmatched_payment', bookingId: null })]);
+    expect(await boardNotices()).toEqual([FLAG_RAISED]);
+  });
+
+  it('tells the board about an amount mismatch while the booking keeps holding', async () => {
+    const d = await deps(okPush());
+    held(await holdSlotAndCharge(d, input()));
+    const [attempt] = await db.select().from(paymentAttempts);
+    await db.delete(outbox);
+
+    const wrongAmount = { ...paymentFor(attempt!.id), amount: money(2) };
+    expect(await applyProviderPayment(uow(), noRail, wrongAmount, 'reconcile', {})).toBe('unmatched');
+
+    expect((await onlyBooking()).status).toBe('holding');
+    expect(await db.select().from(flags)).toEqual([expect.objectContaining({ kind: 'amount_mismatch' })]);
+    expect(await boardNotices()).toEqual([FLAG_RAISED]);
   });
 
   it('flags refund_due without a booking when an intent has none', async () => {

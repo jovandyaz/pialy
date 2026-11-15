@@ -30,6 +30,8 @@ const NO_OVERLAP_CONSTRAINT = 'bookings_no_overlap';
 const ONE_HOLDING_PER_PHONE_INDEX = 'bookings_one_holding_per_phone_idx';
 const HOLD_CREATED = 'hold_created';
 const BOOKING_UPDATED = 'booking.updated';
+/** Only the type: the board refetches and reads the flag behind the owner session. */
+const FLAG_RAISED: OutboxMessage = { topic: BOARD_TOPIC, payload: { type: 'flag.raised' } };
 /** Fetching two rows is enough to tell a unique match from an ambiguous one. */
 const AMBIGUITY_PROBE = 2;
 
@@ -161,6 +163,7 @@ export function createDrizzleBookingPaymentStore(tx: DbTx): BookingPaymentStore 
 
     async flag(kind, bookingId, payload) {
       await tx.insert(flags).values({ kind, bookingId, payload });
+      await enqueueOutbox(tx, [FLAG_RAISED]);
     },
   };
 }

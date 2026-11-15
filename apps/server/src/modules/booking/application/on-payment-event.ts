@@ -22,7 +22,7 @@ export type FlagKind = (typeof FlagKind)[keyof typeof FlagKind];
 
 /**
  * Booking writes for the reaction, inside the transaction that applied the payment. Every status
- * change also notifies the board and the booking's own page.
+ * change also notifies the board and the booking's own page; every new flag notifies the board.
  */
 export interface BookingPaymentStore {
   /** Locks the intent row and returns its status. Called before any booking row is touched. */
