@@ -179,12 +179,16 @@ function Waiting({ booking }: { readonly booking: BookingView }) {
         {qrFirst ? <QrOffer attempt={qr} /> : null}
 
         <ol className="mt-5 border-t border-ink">
-          <Step n={1} title="Abre la app de tu banco" detail="Te llegó una notificación de cobro CoDi." />
-          <Step n={2} title={'Busca "Cobros" o "CoDi"'} detail="En BBVA: Inicio › Notificaciones. Varía por banco." />
+          <Step n={1} title="Abre la app de tu banco" detail="Te llega una notificación de cobro CoDi. Si al entrar no ves la solicitud, sigue al paso 2." />
+          <Step
+            n={2}
+            title="Busca la solicitud de cobro"
+            detail="Cada banco la pone en un lugar distinto: la sección CoDi, tus notificaciones o el historial de operaciones con QR o CoDi."
+          />
           <Step
             n={3}
             title={`Autoriza ${BUSINESS.deposit} a ${BUSINESS.name}`}
-            detail="Esta pantalla cambia sola cuando tu banco confirme."
+            detail={`${booking.holdExpiresAt === null ? '' : `Antes de las ${formatTime(booking.holdExpiresAt)}. `}Esta pantalla cambia sola cuando tu banco confirme.`}
           />
         </ol>
 
