@@ -125,6 +125,7 @@ export const HTTP_UNAUTHORIZED = 401;
 export const HTTP_NOT_FOUND = 404;
 export const HTTP_CONFLICT = 409;
 const NETWORK_FAILURE_STATUS = 0;
+const GET_TIMEOUT_MS = 10_000;
 const FALLBACK_DETAIL = 'Algo salió mal. Intenta de nuevo.';
 const OFFLINE_DETAIL = 'Sin conexión. Revisa tu internet e intenta de nuevo.';
 
@@ -151,25 +152,57 @@ interface RequestOptions {
   readonly signal?: AbortSignal;
 }
 
+interface Deadline {
+  readonly signal: AbortSignal;
+  readonly clear: () => void;
+}
+
+/** Aborts after `ms`, or as soon as `caller` does; built by hand because `AbortSignal.any` needs iOS 17.4. */
+function deadline(ms: number, caller: AbortSignal | undefined): Deadline {
+  const controller = new AbortController();
+  const follow = (): void => controller.abort(caller?.reason);
+  const timer = setTimeout(() => controller.abort(new DOMException('Request timed out', 'TimeoutError')), ms);
+  if (caller?.aborted === true) follow();
+  else caller?.addEventListener('abort', follow, { once: true });
+  return {
+    signal: controller.signal,
+    clear: () => {
+      clearTimeout(timer);
+      caller?.removeEventListener('abort', follow);
+    },
+  };
+}
+
 async function request<T>(path: string, schema: z.ZodType<T>, options: RequestOptions = {}): Promise<T> {
+  const method = options.method ?? METHOD.get;
   const headers: Record<string, string> = { accept: 'application/json' };
   if (options.body !== undefined) headers['content-type'] = 'application/json';
   if (options.idempotencyKey !== undefined) headers['idempotency-key'] = options.idempotencyKey;
+  // A hung GET would hold back every poll behind it; a POST keeps waiting so its answer is not lost.
+  const timeout = method === METHOD.get ? deadline(GET_TIMEOUT_MS, options.signal) : null;
+  const signal = timeout?.signal ?? options.signal;
 
-  let response: Response;
   try {
-    response = await fetch(path, {
-      method: options.method ?? METHOD.get,
-      headers,
-      credentials: 'same-origin',
-      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-      ...(options.signal === undefined ? {} : { signal: options.signal }),
-    });
-  } catch (error) {
-    if (error instanceof DOMException && error.name === 'AbortError') throw error;
-    throw new ApiError(NETWORK_FAILURE_STATUS, OFFLINE_DETAIL, null);
+    let response: Response;
+    try {
+      response = await fetch(path, {
+        method,
+        headers,
+        credentials: 'same-origin',
+        ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+        ...(signal === undefined ? {} : { signal }),
+      });
+    } catch (error) {
+      if (options.signal?.aborted === true) throw error;
+      throw new ApiError(NETWORK_FAILURE_STATUS, OFFLINE_DETAIL, null);
+    }
+    return await readResponse(path, schema, response);
+  } finally {
+    timeout?.clear();
   }
+}
 
+async function readResponse<T>(path: string, schema: z.ZodType<T>, response: Response): Promise<T> {
   const payload: unknown = await response.json().catch(() => null);
   if (!response.ok) {
     const problem = problemSchema.safeParse(payload);
