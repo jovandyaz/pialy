@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { brotliCompressSync, brotliDecompressSync } from 'node:zlib';
 import { afterAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../src/app.js';
 import { loadEnv } from '../src/config/env.js';
@@ -28,6 +29,9 @@ function depsWithWebRoot(webRoot: string) {
 mkdirSync(join(root, 'assets'));
 writeFileSync(join(root, 'index.html'), INDEX);
 writeFileSync(join(root, 'assets', 'x.js'), 'console.log(1)');
+const BIG_JS = 'console.log("pialy");\n'.repeat(200);
+writeFileSync(join(root, 'assets', 'big.js'), BIG_JS);
+writeFileSync(join(root, 'assets', 'big.js.br'), brotliCompressSync(BIG_JS));
 afterAll(async () => {
   rmSync(root, { recursive: true, force: true });
   await handle.close();
@@ -60,6 +64,23 @@ describe('web app serving', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body).toBe('console.log(1)');
     expect(res.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+  });
+
+  it('serves the precompressed brotli variant when the client accepts it', async () => {
+    const res = await app.inject({ method: 'GET', url: '/assets/big.js', headers: { 'accept-encoding': 'br, gzip' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-encoding']).toBe('br');
+    expect(res.headers['content-type']).toContain('javascript');
+    expect(res.headers['vary']).toContain('accept-encoding');
+    expect(res.headers['cache-control']).toBe('public, max-age=31536000, immutable');
+    expect(brotliDecompressSync(res.rawPayload).toString()).toBe(BIG_JS);
+  });
+
+  it('falls back to the plain asset when the client accepts no encoding', async () => {
+    const res = await app.inject({ method: 'GET', url: '/assets/big.js', headers: { 'accept-encoding': 'identity' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-encoding']).toBeUndefined();
+    expect(res.body).toBe(BIG_JS);
   });
 
   it('keeps problem+json 404 for unknown API paths and missing files', async () => {
