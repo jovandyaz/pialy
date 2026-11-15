@@ -34,8 +34,8 @@ export function Sheet({ open, onClose, label, docked = false, className, childre
       className={cn(
         'w-full max-w-none border-0 bg-paper text-ink',
         docked
-          ? 'sticky bottom-0 z-10 m-0 border-t-2 border-ink px-5 pt-4 pb-5.5'
-          : 'mx-auto mt-auto mb-0 max-h-[90dvh] max-w-md border-t-2 border-ink px-5 pt-5 pb-6 open:animate-rise',
+          ? 'sticky bottom-0 z-10 m-0 border-t-2 border-ink px-5 pt-4 pb-[max(1.375rem,env(safe-area-inset-bottom))]'
+          : 'mx-auto mt-auto mb-0 max-h-[90dvh] max-w-md border-t-2 border-ink px-5 pt-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] open:animate-rise sm:my-auto sm:rounded-sm sm:border-2 sm:pb-6',
         className,
       )}
     >
