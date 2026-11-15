@@ -1,16 +1,30 @@
-import { Screen, TopBar } from './components/Screen';
+import { lazy, Suspense } from 'react';
+import { ErrorBoundary } from './components/ErrorBoundary';
+import { Loading, Screen, TopBar } from './components/Screen';
 import { Button } from './components/ui/Button';
 import { BUSINESS } from './lib/business';
 import { navigate, ROUTES, useDocumentTitle, useRoute } from './lib/router';
-import { BoardPage } from './routes/BoardPage';
-import { BookPage } from './routes/BookPage';
-import { LandingPage } from './routes/LandingPage';
-import { LoginPage } from './routes/LoginPage';
-import { VerifyPage } from './routes/VerifyPage';
-import { WaitPage } from './routes/WaitPage';
+
+// One chunk per page: a customer opening a pass doesn't download the landing or the agenda.
+const LandingPage = lazy(() => import('./routes/LandingPage').then((m) => ({ default: m.LandingPage })));
+const BookPage = lazy(() => import('./routes/BookPage').then((m) => ({ default: m.BookPage })));
+const WaitPage = lazy(() => import('./routes/WaitPage').then((m) => ({ default: m.WaitPage })));
+const BoardPage = lazy(() => import('./routes/BoardPage').then((m) => ({ default: m.BoardPage })));
+const LoginPage = lazy(() => import('./routes/LoginPage').then((m) => ({ default: m.LoginPage })));
+const VerifyPage = lazy(() => import('./routes/VerifyPage').then((m) => ({ default: m.VerifyPage })));
 
 export function App() {
   const route = useRoute();
+  return (
+    <ErrorBoundary key={route.name}>
+      <Suspense fallback={<Loading />}>
+        <Page route={route} />
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
+function Page({ route }: { readonly route: ReturnType<typeof useRoute> }) {
   switch (route.name) {
     case 'landing':
       return <LandingPage />;

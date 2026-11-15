@@ -52,6 +52,8 @@ export function registerWeb(app: FastifyInstance, webRoot: string): boolean {
   void app.register(fastifyStatic, {
     root,
     index: INDEX_FILE,
+    // The web build writes `.br` and `.gz` siblings (apps/web/scripts/precompress.mjs).
+    preCompressed: true,
     cacheControl: false,
     setHeaders: (res, filePath) => {
       res.header('cache-control', cacheControlFor(root, filePath));
