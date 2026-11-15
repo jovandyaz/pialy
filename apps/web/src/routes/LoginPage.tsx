@@ -9,7 +9,7 @@ import { navigate, useDocumentTitle } from '../lib/router';
 const PIN_MAX_LENGTH = 12;
 
 export function LoginPage({ next }: { readonly next: string }) {
-  useDocumentTitle('Entrar al tablero');
+  useDocumentTitle('Entrar a la agenda');
   const [pin, setPin] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -44,7 +44,7 @@ export function LoginPage({ next }: { readonly next: string }) {
 
   return (
     <Screen>
-      <TopBar title="Tablero del negocio" />
+      <TopBar title="Agenda del negocio" />
       <form onSubmit={submit} className="flex-1 p-5" noValidate>
         <h1 className="text-[28px] leading-[1.05] font-extrabold tracking-[-0.02em] font-stretch-108%">Entra con tu PIN</h1>
         <p className="mt-1.5 text-base text-muted">Solo para el negocio. La sesión dura 12 horas en este celular.</p>

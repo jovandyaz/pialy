@@ -45,7 +45,7 @@ function toastText({ name, day }: Toast): string {
 }
 
 export function BoardPage() {
-  useDocumentTitle('Tablero');
+  useDocumentTitle('Agenda de hoy');
   const [date, setDate] = useState(() => isoDateOf(new Date()));
   const latestRequest = useRef(0);
   const [board, setBoard] = useState<Remote<Board>>(loading);
@@ -163,7 +163,7 @@ export function BoardPage() {
         </div>
       </header>
 
-      {board.kind === REMOTE.loading ? <Loading label="Cargando tablero…" /> : null}
+      {board.kind === REMOTE.loading ? <Loading label="Cargando agenda…" /> : null}
       {board.kind === REMOTE.error ? (
         <div className="p-5">
           <ErrorNote>{board.detail}</ErrorNote>

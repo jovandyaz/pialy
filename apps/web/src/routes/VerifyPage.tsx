@@ -39,7 +39,7 @@ export function VerifyPage({ token }: { readonly token: string }) {
       {view.kind === REMOTE.ready ? <Verdict view={view.data} onChange={(next) => setView(ready(next))} /> : null}
       <div className="mt-auto border-t-2 border-ink px-5 pt-3 pb-4.5">
         <Button variant="ghost" size="md" onClick={() => navigate(ROUTES.board)}>
-          Volver al tablero
+          Volver a la agenda
         </Button>
       </div>
     </Screen>
