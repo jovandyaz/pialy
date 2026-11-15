@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import type { CheckInStore } from '../../modules/booking/application/check-in.js';
 import { FlagKind } from '../../modules/booking/application/on-payment-event.js';
@@ -20,6 +20,9 @@ import { oneOf } from '../payments/drizzle-payment-repository.js';
 import { changeBooking } from './drizzle-booking-repository.js';
 
 const ON_BOARD = [BookingStatus.Holding, BookingStatus.Confirmed, BookingStatus.CheckedIn];
+const PAID = [BookingStatus.Confirmed, BookingStatus.CheckedIn];
+/** Far above the bookings one business takes in the window the board asks for. */
+const RECENTLY_PAID_LIMIT = 50;
 const UNKNOWN_FLAG_KIND = 'unknown';
 const FLAG_KINDS: readonly FlagKind[] = Object.values(FlagKind);
 const FLAG_RESOLVED = 'flag.resolved';
@@ -57,6 +60,15 @@ export interface BoardBooking {
   readonly checkedInAt: Date | null;
 }
 
+/** A booking whose deposit was just confirmed, on any day: enough for the board to announce it. */
+export interface RecentlyPaid {
+  readonly token: string;
+  readonly slotStart: Date;
+  readonly customerName: string | null;
+  readonly bankName: string | null;
+  readonly confirmedAt: Date;
+}
+
 export interface BoardFlag {
   readonly id: string;
   readonly kind: FlagKind | typeof UNKNOWN_FLAG_KIND;
@@ -84,6 +96,8 @@ const flagPayloadSchema = z.looseObject({
 
 export interface BoardReader {
   bookingsStartingIn(range: Slot): Promise<BoardBooking[]>;
+  /** Paid bookings confirmed after `since`, oldest first; the newest when there are too many. */
+  paidSince(since: Date): Promise<RecentlyPaid[]>;
   openFlags(): Promise<BoardFlag[]>;
   findBooking(token: string): Promise<BoardBooking | null>;
 }
@@ -103,6 +117,28 @@ export function createDrizzleBoardReader(db: Db, log: RowWarnings): BoardReader 
           .where(and(inArray(bookings.status, ON_BOARD), gte(bookings.slotStart, range.start), lt(bookings.slotStart, range.end)))
           .orderBy(asc(bookings.slotStart));
         return rows.map(toBoardBooking);
+      });
+    },
+
+    paidSince(since) {
+      return sanitized(async () => {
+        const rows = await db
+          .select({
+            token: bookings.token,
+            slotStart: bookings.slotStart,
+            customerName: bookings.customerName,
+            bankCode: payerBankCode,
+            confirmedAt: bookings.confirmedAt,
+          })
+          .from(bookings)
+          .where(and(inArray(bookings.status, PAID), gt(bookings.confirmedAt, since)))
+          .orderBy(desc(bookings.confirmedAt), desc(bookings.id))
+          .limit(RECENTLY_PAID_LIMIT);
+        return rows
+          .flatMap(({ bankCode, confirmedAt, ...row }): RecentlyPaid[] =>
+            confirmedAt === null ? [] : [{ ...row, bankName: bankNameOf(bankCode), confirmedAt }],
+          )
+          .reverse();
       });
     },
 

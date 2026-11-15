@@ -231,6 +231,45 @@ describe('board', () => {
     expect(response.body).not.toContain('phoneHash');
   });
 
+  it('lists bookings paid in the last 15 minutes for any day, with only what the payment notice needs', async () => {
+    const app = appAt();
+    const cookie = await ownerCookie(app);
+    const minutesAgo = (minutes: number) => new Date(NOW.getTime() - minutes * 60_000);
+    const paidAt = async (id: string, at: Date) => db.update(bookings).set({ confirmedAt: at }).where(eq(bookings.id, id));
+    const older = await booking('checked_in', { slotStart: new Date('2026-11-18T15:00:00Z') });
+    await paidAt(older.id, minutesAgo(14));
+    const latest = await booking('confirmed', { slotStart: new Date('2026-11-18T16:30:00Z'), bankCode: 40012 });
+    await paidAt(latest.id, minutesAgo(1));
+    const stale = await booking('confirmed', { slotStart: new Date('2026-11-18T17:15:00Z') });
+    await paidAt(stale.id, minutesAgo(16));
+    await booking('holding', { slotStart: new Date('2026-11-18T18:00:00Z') });
+
+    const response = await app.inject({ method: 'GET', url: '/api/board', headers: { cookie } });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json<{ date: string; slots: { booking: unknown }[]; recent: unknown[] }>();
+    expect(body.date).toBe('2026-11-14');
+    expect(body.slots.every((slot) => slot.booking === null)).toBe(true);
+    expect(body.recent).toEqual([
+      {
+        token: older.token,
+        slotStart: '2026-11-18T15:00:00.000Z',
+        customerName: 'Ana Pérez',
+        bankName: null,
+        confirmedAt: minutesAgo(14).toISOString(),
+      },
+      {
+        token: latest.token,
+        slotStart: '2026-11-18T16:30:00.000Z',
+        customerName: 'Ana Pérez',
+        bankName: 'BBVA',
+        confirmedAt: minutesAgo(1).toISOString(),
+      },
+    ]);
+    expect(response.body).not.toContain(PHONE_HASH);
+    expect(response.body).not.toContain(CLABE);
+  });
+
   it('defaults to today in the business time zone and rejects a malformed date', async () => {
     const app = appAt();
     const cookie = await ownerCookie(app);

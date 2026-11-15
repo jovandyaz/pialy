@@ -35,6 +35,7 @@ const HTTP_BAD_REQUEST = 400;
 const HTTP_NOT_FOUND = 404;
 const HTTP_CONFLICT = 409;
 const NOTE_MAX_LENGTH = 500;
+const RECENTLY_PAID_MS = 15 * 60_000;
 const DATE_FORMAT_DETAIL = 'Indica la fecha como AAAA-MM-DD';
 const NOT_CONFIRMED_TYPE = 'urn:pialy:problem:deposit-not-confirmed';
 const ALREADY_CHECKED_IN_TYPE = 'urn:pialy:problem:already-checked-in';
@@ -44,8 +45,9 @@ const flagParams = z.object({ id: z.uuid() });
 const resolveBody = z.strictObject({ note: z.string().trim().min(1).max(NOTE_MAX_LENGTH) });
 
 /**
- * Owner-only API: the day's board, live board events, check-in, flag resolution and the staff
- * verify lookup. Customer data is limited to name, last 4 digits and bank name.
+ * Owner-only API: the day's board (plus deposits just confirmed for any day), live board events,
+ * check-in, flag resolution and the staff verify lookup. Customer data is limited to name, last 4
+ * digits and bank name.
  */
 export const boardRoutes: FastifyPluginAsync<BoardRoutesOptions> = async (app, { db, clock, hub, auth }) => {
   const reader = createDrizzleBoardReader(db, app.log);
@@ -77,6 +79,7 @@ export const boardRoutes: FastifyPluginAsync<BoardRoutesOptions> = async (app, {
         booking: byStart.get(start.getTime()) ?? null,
       })),
       flags: await reader.openFlags(),
+      recent: await reader.paidSince(new Date(clock.now().getTime() - RECENTLY_PAID_MS)),
     };
   });
 
