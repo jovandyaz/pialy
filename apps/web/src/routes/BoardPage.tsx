@@ -15,7 +15,7 @@ import { errorDetail, failed, loading, ready, REMOTE, type Remote } from '../lib
 import { navigate, ROUTES, useDocumentTitle } from '../lib/router';
 import { paymentAnnouncement, speak, speechAvailable } from '../lib/speech';
 import { boardDayLabel, formatTime, isoDateOf } from '../lib/time';
-import { useEventStream } from '../useEventStream';
+import { isPollTick, useEventStream, type StreamHint } from '../useEventStream';
 import { bookingLook, FREE_LOOK, flagTitle, isDuplicatePayment, isPaid, needsRefund } from '../ui/status';
 
 const TOAST_MS = 3200;
@@ -70,7 +70,13 @@ export function BoardPage() {
     if (soundRef.current) for (const booking of paid) speak(paymentAnnouncement(formatTime(booking.slotStart)));
   }, []);
 
-  const refetch = useCallback(() => {
+  const inFlight = useRef(false);
+
+  const refetch = useCallback(
+    (hint?: StreamHint | null) => {
+    // A slow fetch must be able to land: poll ticks never supersede one, SSE-triggered ones may.
+    if (isPollTick(hint) && inFlight.current) return;
+    inFlight.current = true;
     latestRequest.current += 1;
     const request = latestRequest.current;
     const isStale = (): boolean => request !== latestRequest.current;
@@ -88,10 +94,15 @@ export function BoardPage() {
       .catch((error: unknown) => {
         if (isStale() || redirectIfLoggedOut(error)) return;
         setBoard((current) => (current.kind === REMOTE.ready ? current : failed(error)));
+      })
+      .finally(() => {
+        if (!isStale()) inFlight.current = false;
       });
-  }, [announce]);
+    },
+    [announce],
+  );
 
-  useEffect(refetch, [refetch]);
+  useEffect(() => refetch(), [refetch]);
   useEventStream(board.kind === REMOTE.ready ? API_PATH.boardEvents : null, refetch);
 
   function toggleSound() {
@@ -149,7 +160,7 @@ export function BoardPage() {
       {board.kind === REMOTE.error ? (
         <div className="p-5">
           <ErrorNote>{board.detail}</ErrorNote>
-          <Button variant="ghost" size="md" className="mt-3" onClick={refetch}>
+          <Button variant="ghost" size="md" className="mt-3" onClick={() => refetch()}>
             Reintentar
           </Button>
         </div>

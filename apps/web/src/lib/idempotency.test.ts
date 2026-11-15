@@ -7,6 +7,8 @@ const problem = (type: string) => ({ type });
 describe('shouldKeepKey', () => {
   it('keeps the key when the outcome is unknown', () => {
     expect(shouldKeepKey(new ApiError(0, 'sin red', null))).toBe(true);
+    expect(shouldKeepKey(new ApiError(200, 'respuesta ilegible', null))).toBe(true);
+    expect(shouldKeepKey(new ApiError(201, 'respuesta ilegible', null))).toBe(true);
     expect(shouldKeepKey(new ApiError(409, 'en proceso', problem('urn:pialy:problem:request-in-progress')))).toBe(true);
   });
 

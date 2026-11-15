@@ -3,14 +3,21 @@ import { streamEventSchema } from './api';
 
 export const POLL_INTERVAL_MS = 2000;
 
+const POLL_HINT_TYPE = 'poll';
+
 export interface StreamHint {
   readonly type: string;
   readonly status?: string;
 }
 
+/** True for the hint of a fallback poll tick: callers may skip it while a fetch is in flight. */
+export function isPollTick(hint: StreamHint | null | undefined): boolean {
+  return hint?.type === POLL_HINT_TYPE;
+}
+
 /**
  * Calls `onChange` on every server-sent event, and every 2 s while the stream is down (refused,
- * dropped or reconnecting); `hint` is `null` for a poll tick or any (re)connect, which closes the
+ * dropped or reconnecting); `hint` is `{ type: 'poll' }` for a poll tick and `null` for any (re)connect, which closes the
  * race between the first fetch and the first subscription. Callers refetch.
  */
 export function useEventStream(url: string | null, onChange: (hint: StreamHint | null) => void): void {
@@ -23,7 +30,7 @@ export function useEventStream(url: string | null, onChange: (hint: StreamHint |
     if (url === null) return undefined;
     let poll: ReturnType<typeof setInterval> | undefined;
     const startPolling = (): void => {
-      poll ??= setInterval(() => callback.current(null), POLL_INTERVAL_MS);
+      poll ??= setInterval(() => callback.current({ type: POLL_HINT_TYPE }), POLL_INTERVAL_MS);
     };
     const stopPolling = (): void => {
       clearInterval(poll);

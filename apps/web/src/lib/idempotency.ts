@@ -2,6 +2,7 @@ import { useCallback, useMemo, useRef } from 'react';
 import { ApiError, HTTP_CONFLICT } from '../api';
 
 const NETWORK_FAILURE_STATUS = 0;
+const FIRST_ERROR_STATUS = 400;
 const REQUEST_IN_PROGRESS_TYPE = 'urn:pialy:problem:request-in-progress';
 
 /**
@@ -11,7 +12,8 @@ const REQUEST_IN_PROGRESS_TYPE = 'urn:pialy:problem:request-in-progress';
  */
 export function shouldKeepKey(error: unknown): boolean {
   if (!(error instanceof ApiError)) return true;
-  if (error.status === NETWORK_FAILURE_STATUS) return true;
+  // 0 = network failure; 1xx-3xx = the call succeeded but the response was unusable (unseen success).
+  if (error.status === NETWORK_FAILURE_STATUS || error.status < FIRST_ERROR_STATUS) return true;
   return error.status === HTTP_CONFLICT && error.problem?.['type'] === REQUEST_IN_PROGRESS_TYPE;
 }
 

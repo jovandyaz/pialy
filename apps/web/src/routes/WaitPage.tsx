@@ -12,7 +12,7 @@ import { errorDetail, failed, loading, ready, REMOTE, type Remote } from '../lib
 import { navigate, ROUTES, useDocumentTitle } from '../lib/router';
 import { formatTime, shortDateLabel } from '../lib/time';
 import { useHoldCountdown } from '../lib/useHoldCountdown';
-import { useEventStream } from '../useEventStream';
+import { isPollTick, useEventStream, type StreamHint } from '../useEventStream';
 import { isPaid } from '../ui/status';
 import { PassView } from './PassView';
 
@@ -36,7 +36,12 @@ export function WaitPage({ token }: { readonly token: string }) {
 
   const latestRequest = useRef(0);
 
-  const refetch = useCallback(() => {
+  const inFlight = useRef(false);
+
+  const refetch = useCallback((hint?: StreamHint | null) => {
+    // A slow fetch must be able to land: poll ticks never supersede one, SSE-triggered ones may.
+    if (isPollTick(hint) && inFlight.current) return;
+    inFlight.current = true;
     latestRequest.current += 1;
     const request = latestRequest.current;
     const isStale = (): boolean => request !== latestRequest.current;
@@ -47,10 +52,13 @@ export function WaitPage({ token }: { readonly token: string }) {
       })
       .catch((error: unknown) => {
         if (!isStale()) setBooking((current) => (current.kind === REMOTE.ready ? current : failed(error)));
+      })
+      .finally(() => {
+        if (!isStale()) inFlight.current = false;
       });
   }, [token]);
 
-  useEffect(refetch, [refetch]);
+  useEffect(() => refetch(), [refetch]);
   useEventStream(API_PATH.bookingEvents(token), refetch);
 
   if (booking.kind === REMOTE.loading) {
