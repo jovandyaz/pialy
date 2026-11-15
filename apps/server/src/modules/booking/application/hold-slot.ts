@@ -127,8 +127,9 @@ export interface HoldRepository {
   /** Stores the rail's ids on the attempt and finishes the key with the staged response. */
   recordPush(hold: HoldRef, charge: { readonly transactionId: string; readonly codiId: string }): Promise<HoldResponse>;
   /**
-   * Fails the attempt (kept, so a late payment still matches it), expires the booking and finishes
-   * the key with `failed`; answers the staged response instead when the attempt was already paid.
+   * Fails the attempt (kept, so a late payment still matches it), expires the booking only when no
+   * other attempt is left awaiting (the intent expired), and finishes the key with `failed`;
+   * answers the staged response instead when the attempt was already paid.
    */
   failPush(hold: HoldRef, failed: HoldResponse): Promise<HoldResponse>;
 }

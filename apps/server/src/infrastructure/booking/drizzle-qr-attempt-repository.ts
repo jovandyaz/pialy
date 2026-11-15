@@ -36,12 +36,10 @@ const QR_CREATED = 'qr_created';
 
 const stagedSchema = z.object({ bookingId: z.uuid(), attemptId: z.uuid() });
 const createdSchema = z.object({ qrString: z.string().min(1), expiresAt: z.string().min(1) });
-const qrFailedSchema = z.object({
-  type: z.string(),
-  title: z.string(),
-  status: z.literal(QrStatus.QrFailed),
-  detail: z.string(),
-});
+const problemSchema = <Status extends number>(status: Status) =>
+  z.object({ type: z.string(), title: z.string(), status: z.literal(status), detail: z.string() });
+const notHoldingSchema = problemSchema(QrStatus.NotHolding);
+const qrFailedSchema = problemSchema(QrStatus.QrFailed);
 
 /**
  * Lock order: idempotency key, payment intent, then the booking, as for holds and webhooks. No path
@@ -53,7 +51,7 @@ export function createDrizzleQrAttemptRepository(db: Db): QrAttemptRepository {
       return sanitized(() => db.transaction((tx) => begin(tx, attempt)));
     },
 
-    recordQr(attempt, qrId, created) {
+    recordQr(attempt, qrId, outcomes) {
       return sanitized(() =>
         db.transaction(async (tx) => {
           const ref = keyOf(attempt);
@@ -62,8 +60,11 @@ export function createDrizzleQrAttemptRepository(db: Db): QrAttemptRepository {
           const match = await attemptOf(payments, attempt);
           await payments.saveAttempt({ ...match.attempt, provider: { ...match.attempt.provider, qrId } });
           if (key.response !== null) return toQrResponse(key.response);
+          if ((await lockedBookingStatus(tx, attempt.bookingId)) !== BookingStatus.Holding) {
+            return finish(tx, ref, outcomes.notHolding);
+          }
           await extendHold(tx, attempt.bookingId, match.attempt.expiresAt);
-          return finish(tx, ref, created);
+          return finish(tx, ref, outcomes.created);
         }),
       );
     },
@@ -141,6 +142,12 @@ async function createAttempt(tx: DbTx, ref: KeyRef, input: NewQrAttempt): Promis
   return { kind: 'started', attempt, bookingNumber: booking.number };
 }
 
+async function lockedBookingStatus(tx: DbTx, bookingId: string): Promise<string> {
+  const [row] = await tx.select({ status: bookings.status }).from(bookings).where(eq(bookings.id, bookingId)).for('update');
+  if (row === undefined) throw new Error(`booking ${bookingId} of a qr attempt does not exist`);
+  return row.status;
+}
+
 async function attemptsOfIntent(tx: DbTx, intentId: string): Promise<number> {
   const [row] = await tx.select({ attempts: count() }).from(paymentAttempts).where(eq(paymentAttempts.intentId, intentId));
   return row?.attempts ?? 0;
@@ -186,6 +193,9 @@ function keyOf(attempt: QrAttemptRef): KeyRef {
 /** Parses through one schema so a first answer and its replay serialize identically. */
 function toQrResponse(stored: StoredResponse): QrResponse {
   if (stored.status === QrStatus.Created) return { status: QrStatus.Created, body: createdSchema.parse(stored.body) };
+  if (stored.status === QrStatus.NotHolding) {
+    return { status: QrStatus.NotHolding, body: notHoldingSchema.parse(stored.body) };
+  }
   if (stored.status === QrStatus.QrFailed) return { status: QrStatus.QrFailed, body: qrFailedSchema.parse(stored.body) };
   throw new Error(`unexpected stored qr response status ${stored.status}`);
 }

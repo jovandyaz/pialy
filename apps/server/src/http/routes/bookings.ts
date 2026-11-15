@@ -9,7 +9,11 @@ import {
   IdempotencyKeyReusedError,
   holdSlotAndCharge,
 } from '../../modules/booking/application/hold-slot.js';
-import { startQrAttempt } from '../../modules/booking/application/start-qr-attempt.js';
+import {
+  NOT_HOLDING_DETAIL,
+  NOT_HOLDING_TYPE,
+  startQrAttempt,
+} from '../../modules/booking/application/start-qr-attempt.js';
 import {
   ActiveHoldExistsError,
   BookingNotFoundError,
@@ -108,14 +112,7 @@ const problems: readonly (readonly [new (...args: never[]) => Error, DomainProbl
     BookingNotFoundError,
     { status: HTTP_NOT_FOUND, type: 'urn:pialy:problem:booking-not-found', detail: 'No encontramos esa reserva' },
   ],
-  [
-    BookingNotHoldingError,
-    {
-      status: HTTP_CONFLICT,
-      type: 'urn:pialy:problem:booking-not-holding',
-      detail: 'Esta reserva ya no está esperando el pago',
-    },
-  ],
+  [BookingNotHoldingError, { status: HTTP_CONFLICT, type: NOT_HOLDING_TYPE, detail: NOT_HOLDING_DETAIL }],
   [
     TooManyAttemptsError,
     {

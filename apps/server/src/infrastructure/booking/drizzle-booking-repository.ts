@@ -91,7 +91,7 @@ export function createDrizzleHoldRepository(db: Db): HoldRepository {
           const { intent, attempt } = failAttempt(match.intent, match.attempt, otherAwaiting);
           await payments.saveIntent(intent);
           await payments.saveAttempt(attempt);
-          if (match.attempt.status === AttemptStatus.Awaiting) {
+          if (intent.status === IntentStatus.Expired && match.intent.status !== IntentStatus.Expired) {
             await changeBooking(tx, bookingIn(hold.bookingId, BookingStatus.Holding), { status: BookingStatus.Expired });
           }
           const paid = match.attempt.status === AttemptStatus.Succeeded;

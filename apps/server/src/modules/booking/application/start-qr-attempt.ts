@@ -6,11 +6,13 @@ import { DEPOSIT_CONCEPT, IN_FLIGHT_TIMEOUT_MS, logRailFailure, type HoldLogger 
 export const QR_SCOPE = 'qr';
 export const QR_FAILED_DETAIL = 'No pudimos generar el código QR. Intenta de nuevo.';
 export const QR_FAILED_TYPE = 'urn:pialy:problem:qr-failed';
+export const NOT_HOLDING_DETAIL = 'Esta reserva ya no está esperando el pago';
+export const NOT_HOLDING_TYPE = 'urn:pialy:problem:booking-not-holding';
 
 const MS_PER_SECOND = 1000;
 
 /** HTTP statuses a QR attempt answers with once its key is finished. */
-export const QrStatus = { Created: 201, QrFailed: 502 } as const;
+export const QrStatus = { Created: 201, NotHolding: 409, QrFailed: 502 } as const;
 
 export interface QrCreatedBody {
   /** The CoDi payload pey returns; the page draws it as a QR code. */
@@ -18,22 +20,36 @@ export interface QrCreatedBody {
   readonly expiresAt: string;
 }
 
-export interface QrFailedProblem {
+export interface QrProblem<Status extends number> {
   readonly type: string;
   readonly title: string;
-  readonly status: typeof QrStatus.QrFailed;
+  readonly status: Status;
   readonly detail: string;
 }
 
 /** What `POST /api/bookings/:token/qr` answers; stored on the idempotency key and replayed as is. */
 export type QrResponse =
   | { readonly status: typeof QrStatus.Created; readonly body: QrCreatedBody }
-  | { readonly status: typeof QrStatus.QrFailed; readonly body: QrFailedProblem };
+  | { readonly status: typeof QrStatus.NotHolding; readonly body: QrProblem<typeof QrStatus.NotHolding> }
+  | { readonly status: typeof QrStatus.QrFailed; readonly body: QrProblem<typeof QrStatus.QrFailed> };
 
 export const QR_FAILED: QrResponse = {
   status: QrStatus.QrFailed,
   body: { type: QR_FAILED_TYPE, title: 'Bad Gateway', status: QrStatus.QrFailed, detail: QR_FAILED_DETAIL },
 };
+
+/** The booking stopped holding while its QR was being created; the same problem the route sends up front. */
+export const QR_NOT_HOLDING: QrResponse = {
+  status: QrStatus.NotHolding,
+  body: { type: NOT_HOLDING_TYPE, title: 'Conflict', status: QrStatus.NotHolding, detail: NOT_HOLDING_DETAIL },
+};
+
+export interface QrOutcomes {
+  /** For a booking still `holding`. */
+  readonly created: QrResponse;
+  /** For a booking paid, canceled or expired during the rail call: its QR is withheld. */
+  readonly notHolding: QrResponse;
+}
 
 export interface NewQrAttempt {
   readonly idempotencyKey: string;
@@ -69,10 +85,12 @@ export interface QrAttemptRepository {
    */
   begin(attempt: NewQrAttempt): Promise<BeganQrAttempt>;
   /**
-   * Stores the QR id on the attempt, extends the hold of a booking still `holding` to the attempt's
-   * expiry (notifying board and booking) and finishes the key with `created`.
+   * Stores the QR id on the attempt, so reconcile and the late watch can find it whatever the
+   * answer. A booking still `holding` gets its hold extended to the attempt's expiry (notifying
+   * board and booking) and the key finishes with `created`; any other booking finishes it with
+   * `notHolding`.
    */
-  recordQr(attempt: QrAttemptRef, qrId: string, created: QrResponse): Promise<QrResponse>;
+  recordQr(attempt: QrAttemptRef, qrId: string, outcomes: QrOutcomes): Promise<QrResponse>;
   /** Fails the attempt; the booking expires only when no other attempt is left awaiting. */
   failQr(attempt: QrAttemptRef, failed: QrResponse): Promise<QrResponse>;
 }
@@ -141,8 +159,8 @@ async function createQr(
     return deps.attempts.failQr(attempt, QR_FAILED);
   }
   return deps.attempts.recordQr(attempt, charge.qrId, {
-    status: QrStatus.Created,
-    body: { qrString: charge.qrString, expiresAt: expiresAt.toISOString() },
+    created: { status: QrStatus.Created, body: { qrString: charge.qrString, expiresAt: expiresAt.toISOString() } },
+    notHolding: QR_NOT_HOLDING,
   });
 }
 

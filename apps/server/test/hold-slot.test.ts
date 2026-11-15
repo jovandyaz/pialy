@@ -337,6 +337,34 @@ describe('holdSlotAndCharge', () => {
     expect(again.status).toBe(201);
   });
 
+  it('keeps the booking holding when the push fails while another attempt is still awaiting', async () => {
+    const pending = deferred<{ transactionId: string; codiId: string }>();
+    const push = vi.fn<PushCharge>(() => pending.promise);
+    const d = await deps(push);
+
+    const response = holdSlotAndCharge(d, input());
+    await vi.waitFor(() => expect(push).toHaveBeenCalledTimes(1));
+    const booking = await onlyBooking();
+    await db.insert(paymentAttempts).values({
+      intentId: booking.intentId!,
+      mode: 'qr',
+      status: 'awaiting',
+      expiresAt: new Date('2026-11-14T18:07:00.000Z'),
+    });
+    await db.delete(outbox);
+    pending.reject(new RailUnavailableError('pey POST /codi/pn failed: request timed out'));
+
+    expect((await response).status).toBe(502);
+    expect((await onlyBooking()).status).toBe('holding');
+    expect(await db.select().from(paymentIntents)).toEqual([expect.objectContaining({ status: 'processing' })]);
+    const attempts = await db.select().from(paymentAttempts);
+    expect(attempts.map((a) => [a.mode, a.status]).sort()).toEqual([
+      ['push', 'failed'],
+      ['qr', 'awaiting'],
+    ]);
+    expect(await db.select().from(outbox)).toEqual([]);
+  });
+
   it('never leaves the key in flight when the connector fails unexpectedly', async () => {
     const d = await deps(vi.fn<PushCharge>(() => Promise.reject(new TypeError(`boom for ${PHONE10}`))));
     const request = input();

@@ -3,6 +3,7 @@ import { createPeyConnector } from '@pialy/connector-pey';
 import {
   RailRejectedError,
   RailUnavailableError,
+  applyProviderPayment,
   money,
   reconcileAttempt,
   type PaymentLookup,
@@ -43,6 +44,12 @@ const PROBLEM = 'application/problem+json';
 const PUSH_TX = '01M7PUSHTX0000000000000000';
 const QR_ID = '35a13c183a';
 const QR_STRING = '{"TYP":20,"v":{"DEV":"00000000000000/0"},"ic":{"IDC":"35a13c183a"}}';
+const NOT_HOLDING = {
+  type: 'urn:pialy:problem:booking-not-holding',
+  title: 'Conflict',
+  status: 409,
+  detail: 'Esta reserva ya no está esperando el pago',
+};
 
 let now = HELD_AT;
 const clock = { now: () => now };
@@ -256,7 +263,7 @@ describe('POST /api/bookings/:token/qr', () => {
 
       expect(res.statusCode).toBe(409);
       expect(res.headers['content-type']).toContain(PROBLEM);
-      expect(res.json()).toMatchObject({ type: 'urn:pialy:problem:booking-not-holding', status: 409 });
+      expect(res.json()).toEqual(NOT_HOLDING);
       expect(qr).not.toHaveBeenCalled();
       expect(await attemptsOf(token)).toHaveLength(1);
       expect(await db.select().from(idempotencyKeys).where(eq(idempotencyKeys.scope, 'qr'))).toEqual([]);
@@ -395,6 +402,46 @@ describe('POST /api/bookings/:token/qr', () => {
     expect(await db.select().from(paymentIntents)).toEqual([expect.objectContaining({ status: 'expired' })]);
     const notices = await db.select().from(outbox);
     expect(notices.map((row) => (row.payload as { status: string }).status)).toEqual(['expired', 'expired']);
+  });
+
+  it('withholds the QR with the 409 problem when the push is paid during the QR call, and keeps its id', async () => {
+    const pending = deferred<{ qrId: string; qrString: string }>();
+    const qr = vi.fn<QrCharge>(() => pending.promise);
+    const app = appWith({ createQrCharge: qr });
+    const token = await hold(app);
+    now = QR_AT;
+    const key = randomUUID();
+
+    const res = postQr(app, token, key);
+    await vi.waitFor(() => expect(qr).toHaveBeenCalledTimes(1));
+    const pushPayment: ProviderPayment = {
+      providerTxId: PUSH_TX,
+      amount: money(1),
+      paidAt: new Date('2026-11-14T12:01:10.000Z'),
+      ref: { transactionId: PUSH_TX },
+    };
+    const unpaid = { findPayments: () => Promise.resolve([]) };
+    await applyProviderPayment(createDrizzleUnitOfWork(db, paymentReaction), unpaid, pushPayment, 'reconcile', {});
+    expect((await bookingOf(token)).status).toBe('confirmed');
+    await db.delete(outbox);
+    pending.resolve({ qrId: QR_ID, qrString: QR_STRING });
+    const response = await res;
+    const replay = await postQr(app, token, key);
+    await app.close();
+
+    expect(response.statusCode).toBe(409);
+    expect(response.headers['content-type']).toContain(PROBLEM);
+    expect(response.json()).toEqual(NOT_HOLDING);
+    expect(response.body).not.toContain('qrString');
+    expect(response.body).not.toContain(QR_ID);
+    expect(replay.statusCode).toBe(409);
+    expect(replay.body).toBe(response.body);
+    expect(qr).toHaveBeenCalledTimes(1);
+    expect(await qrAttemptOf(token)).toMatchObject({ status: 'awaiting', providerQrId: QR_ID });
+    expect(await bookingOf(token)).toMatchObject({ status: 'confirmed', holdExpiresAt: new Date(HOLD_EXPIRES_AT) });
+    expect(await db.select().from(outbox)).toEqual([]);
+    const [stored] = await db.select().from(idempotencyKeys).where(eq(idempotencyKeys.scope, 'qr'));
+    expect(stored).toMatchObject({ recoveryPoint: 'finished', responseCode: 409, lockedAt: null });
   });
 
   it('answers 409 "Solicitud en proceso" while the same key is in flight', async () => {
