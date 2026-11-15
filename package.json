@@ -1,0 +1,24 @@
+{
+  "name": "pialy",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "license": "SEE LICENSE IN LICENSE.md",
+  "packageManager": "pnpm@12.17.0",
+  "engines": { "node": ">=24", "pnpm": ">=12.17.0" },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/compat": "2.1.0",
+    "@types/node": "24.19.2",
+    "eslint": "10.14.0",
+    "eslint-import-resolver-typescript": "4.4.5",
+    "eslint-plugin-import-x": "4.18.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.2",
+    "vitest": "5.1.0"
+  }
+}

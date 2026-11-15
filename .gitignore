@@ -9,3 +9,7 @@ dist/
 docs/superpowers/
 PRODUCT.md
 design/
+.claude/
+docs/demo-script.md
+docs/bank-matrix.md
+DESIGN.md
