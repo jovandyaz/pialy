@@ -1,0 +1,3 @@
+ALTER TABLE "payment_intents" DROP CONSTRAINT "payment_intents_amount_check";--> statement-breakpoint
+ALTER TABLE "bookings" ADD CONSTRAINT "bookings_during_check" CHECK (NOT isempty("bookings"."during") AND lower("bookings"."during") = "bookings"."slot_start");--> statement-breakpoint
+ALTER TABLE "payment_intents" ADD CONSTRAINT "payment_intents_amount_check" CHECK ("payment_intents"."amount_minor" > 0);
