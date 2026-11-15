@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { STATUS, type BookingView } from '../api';
 import { QrCode } from '../components/QrCode';
-import { Screen } from '../components/Screen';
+import { HomeMark, Screen } from '../components/Screen';
 import { Numeral } from '../components/ui/Numeral';
 import { KeyValues, Label, Panel } from '../components/ui/Panel';
 import { StatusTag } from '../components/ui/StatusTag';
@@ -10,18 +10,15 @@ import { ROUTES } from '../lib/router';
 import { formatTime, longDateLabel, minutesBetween } from '../lib/time';
 import { bookingLook } from '../ui/status';
 
-const SHORT_TOKEN_LENGTH = 4;
-
 export function PassView({ booking }: { readonly booking: BookingView }) {
   const verifyUrl = new URL(ROUTES.verify(booking.token), window.location.origin).toString();
-  const shortPass = `${window.location.host}${ROUTES.verify(booking.token.slice(0, SHORT_TOKEN_LENGTH))}…`;
   const pass = booking.pass;
   const used = booking.status === STATUS.checkedIn;
   const rows: [string, ReactNode][] = [['Anticipo', BUSINESS.depositMxn]];
   if (pass?.bankName) rows.push(['Banco', pass.bankName]);
   if (pass) rows.push(['Celular', `··${pass.phoneLast4}`]);
   if (pass?.trackingKey) rows.push(['Clave de rastreo', <span className="tabular-nums">{pass.trackingKey}</span>]);
-  rows.push(['Pase', <span className="tabular-nums">{shortPass}</span>]);
+  rows.push(['Código del pase', <span className="break-all tabular-nums">{booking.token}</span>]);
 
   return (
     <Screen>
@@ -44,6 +41,9 @@ export function PassView({ booking }: { readonly booking: BookingView }) {
       <QrCode value={verifyUrl} label="Código del pase" className="mx-auto mt-3 mb-1 size-50" />
       <KeyValues rows={rows} className="mx-5" />
       <p className="mx-5 mt-3 text-[13px] text-muted">Muestra este pase al llegar. Confirma el pago de la cita, no tu identidad.</p>
+      <footer className="mx-5 mt-auto flex justify-center border-t border-ink/15 pt-4 pb-6">
+        <HomeMark />
+      </footer>
     </Screen>
   );
 }

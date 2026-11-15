@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useSyncExternalStore, type MouseEvent } from 'react';
 
 export const ROUTES = {
   landing: '/',
@@ -61,6 +61,15 @@ export function navigate(to: string, options: { replace?: boolean } = {}): void 
   else window.history.pushState(null, '', to);
   window.scrollTo(0, 0);
   for (const listener of listeners) listener();
+}
+
+/** Click handler for same-origin `<a>` links: client-side navigation, but keeps modifier-click/new-tab behavior. */
+export function spaLink(to: string) {
+  return (event: MouseEvent<HTMLAnchorElement>): void => {
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    event.preventDefault();
+    navigate(to);
+  };
 }
 
 export function useRoute(): Route {

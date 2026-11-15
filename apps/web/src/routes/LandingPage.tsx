@@ -10,7 +10,7 @@
  * FORM: "live slot", extended in its established world. FINISH: unreviewed and undocumented is unfinished; this
  * build ends with the finish review, the verdict, and DESIGN.md.
  */
-import { useEffect, type MouseEvent, type ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { STATUS } from '../api';
 import { QrCode } from '../components/QrCode';
 import { buttonClass } from '../components/ui/Button';
@@ -19,7 +19,7 @@ import { KeyValues, Label, Panel } from '../components/ui/Panel';
 import { StatusPill, StatusTag } from '../components/ui/StatusTag';
 import { BUSINESS } from '../lib/business';
 import { cn } from '../lib/cn';
-import { navigate, ROUTES } from '../lib/router';
+import { ROUTES, spaLink } from '../lib/router';
 import { formatCountdown } from '../lib/useHoldCountdown';
 import { HOLD_SECONDS, LOOP_PHASE, PAID_LOOP, useSlotLoop, type SlotLoop } from '../lib/useSlotLoop';
 import { bookingLook, FREE_LOOK, type StatusLook } from '../ui/status';
@@ -86,14 +86,6 @@ export function LandingPage() {
       <SiteFooter />
     </div>
   );
-}
-
-function spaLink(to: string) {
-  return (event: MouseEvent<HTMLAnchorElement>) => {
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
-    event.preventDefault();
-    navigate(to);
-  };
 }
 
 const shell = 'mx-auto w-full max-w-[1200px] px-4 sm:px-6 lg:px-10';
