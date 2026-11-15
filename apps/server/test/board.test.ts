@@ -21,6 +21,8 @@ beforeEach(async () => {
 const SLOT_START = new Date('2026-11-20T15:00:00Z');
 const DATE = '2026-11-20';
 const NOW = new Date('2026-11-14T12:00:00Z');
+/** 08:30 in Mexico City on the slot's day. */
+const SLOT_DAY_NOW = new Date('2026-11-20T14:30:00Z');
 const PHONE_HASH = 'phone-hash-must-never-leave';
 const CLABE = '012180001234567899';
 
@@ -365,28 +367,28 @@ describe('board flags with bad rows', () => {
 
 describe('check-in', () => {
   it('checks in a confirmed booking once; the second call is 409 with the original time', async () => {
-    const app = appAt();
+    const app = appAt(SLOT_DAY_NOW);
     const cookie = await ownerCookie(app);
     const { token } = await booking('confirmed');
     const url = `/api/bookings/${token}/check-in`;
 
     const first = await app.inject({ method: 'POST', url, headers: { cookie } });
     expect(first.statusCode).toBe(200);
-    expect(first.json()).toEqual({ checkedInAt: NOW.toISOString() });
+    expect(first.json()).toEqual({ checkedInAt: SLOT_DAY_NOW.toISOString() });
 
     await current?.close();
-    const later = appAt(new Date(NOW.getTime() + 60_000));
+    const later = appAt(new Date(SLOT_DAY_NOW.getTime() + 60_000));
     const second = await later.inject({ method: 'POST', url, headers: { cookie } });
     expect(second.statusCode).toBe(409);
     expect(second.headers['content-type']).toContain('application/problem+json');
-    expect(second.json()).toMatchObject({ status: 409, detail: 'Este pase ya se usó', checkedInAt: NOW.toISOString() });
+    expect(second.json()).toMatchObject({ status: 409, detail: 'Este pase ya se usó', checkedInAt: SLOT_DAY_NOW.toISOString() });
 
     const [row] = await db.select().from(bookings).where(eq(bookings.token, token));
-    expect(row).toMatchObject({ status: 'checked_in', checkedInAt: NOW });
+    expect(row).toMatchObject({ status: 'checked_in', checkedInAt: SLOT_DAY_NOW });
   });
 
   it('refuses a booking that is not confirmed, or unknown', async () => {
-    const app = appAt();
+    const app = appAt(SLOT_DAY_NOW);
     const cookie = await ownerCookie(app);
     for (const status of ['holding', 'expired', 'canceled']) {
       const { token } = await booking(status, { slotStart: new Date(`2026-11-2${status.length % 9}T15:00:00Z`) });
@@ -403,8 +405,33 @@ describe('check-in', () => {
     expect(missing.statusCode).toBe(404);
   });
 
+  it('refuses a confirmed pass on any other local day and leaves it usable', async () => {
+    const { token } = await booking('confirmed');
+    const url = `/api/bookings/${token}/check-in`;
+    // 2026-11-19 23:30 in Mexico City is 05:30 UTC on the slot's UTC date: the local day decides.
+    for (const now of [NOW, new Date('2026-11-20T05:30:00Z'), new Date('2026-11-21T06:30:00Z')]) {
+      await current?.close();
+      const app = appAt(now);
+      const cookie = await ownerCookie(app);
+      const response = await app.inject({ method: 'POST', url, headers: { cookie } });
+      expect(response.statusCode, now.toISOString()).toBe(409);
+      expect(response.json()).toMatchObject({ detail: 'Este pase es para otro día', slotStart: SLOT_START.toISOString() });
+    }
+    const [row] = await db.select().from(bookings).where(eq(bookings.token, token));
+    expect(row).toMatchObject({ status: 'confirmed', checkedInAt: null });
+  });
+
+  it('accepts the pass at any time of its local day', async () => {
+    const { token } = await booking('confirmed');
+    // 23:59 local on 2026-11-20 is 05:59 UTC on 2026-11-21.
+    const app = appAt(new Date('2026-11-21T05:59:00Z'));
+    const cookie = await ownerCookie(app);
+    const response = await app.inject({ method: 'POST', url: `/api/bookings/${token}/check-in`, headers: { cookie } });
+    expect(response.statusCode).toBe(200);
+  });
+
   it('lets exactly one of two simultaneous check-ins win', async () => {
-    const app = appAt();
+    const app = appAt(SLOT_DAY_NOW);
     const cookie = await ownerCookie(app);
     const { token } = await booking('confirmed');
     const url = `/api/bookings/${token}/check-in`;
@@ -418,7 +445,7 @@ describe('check-in', () => {
   });
 
   it('announces the check-in to the board and the booking page through the outbox', async () => {
-    const app = appAt();
+    const app = appAt(SLOT_DAY_NOW);
     const cookie = await ownerCookie(app);
     const { token } = await booking('confirmed');
     await app.inject({ method: 'POST', url: `/api/bookings/${token}/check-in`, headers: { cookie } });

@@ -7,7 +7,7 @@ import { BUSINESS } from '../lib/business';
 import { redirectIfLoggedOut } from '../lib/owner';
 import { errorDetail, failed, loading, ready, REMOTE, type Remote } from '../lib/remote';
 import { navigate, ROUTES, useDocumentTitle } from '../lib/router';
-import { formatTime } from '../lib/time';
+import { atLabel, formatTime, isoDateOf, longDateLabel, shortDateLabel } from '../lib/time';
 import { bookingLook, isPaid } from '../ui/status';
 
 const ALREADY_CHECKED_IN_TYPE = 'urn:pialy:problem:already-checked-in';
@@ -56,7 +56,9 @@ function Verdict({ view, onChange }: { readonly view: VerifyView; readonly onCha
   const [pending, setPending] = useState(false);
   const [reused, setReused] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const who = `${view.customerName ?? 'Cliente'} · ${formatTime(view.slotStart)} · ${BUSINESS.service} ${BUSINESS.serviceMinutes} min`;
+  const who = `${view.customerName ?? 'Cliente'} · ${shortDateLabel(view.slotStart)} · ${formatTime(view.slotStart)} · ${BUSINESS.service} ${BUSINESS.serviceMinutes} min`;
+  // The server refuses another day's pass too; this only spares a doomed tap.
+  const forToday = isoDateOf(new Date(view.slotStart)) === isoDateOf(new Date());
 
   async function checkIn() {
     if (pending) return;
@@ -96,7 +98,7 @@ function Verdict({ view, onChange }: { readonly view: VerifyView; readonly onCha
   const rows: [string, string][] = [['Anticipo', BUSINESS.depositMxn]];
   if (view.bankName) rows.push(['Banco', view.bankName]);
   rows.push(['Celular', `··${view.phoneLast4}`]);
-  rows.push(['Estado de la cita', usedAt === null ? 'Sin usar' : `Usado a las ${formatTime(usedAt)}`]);
+  rows.push(['Estado de la cita', usedAt === null ? 'Sin usar' : `Usado ${atLabel(usedAt)}`]);
 
   return (
     <>
@@ -108,7 +110,12 @@ function Verdict({ view, onChange }: { readonly view: VerifyView; readonly onCha
         <p className="mt-1.5">{who}</p>
       </Panel>
       <KeyValues rows={rows} className="mx-5 mt-3.5" />
-      {usedAt === null ? (
+      {usedAt === null && !forToday ? (
+        <Panel tone="late" as="div" role="status" className="mx-5 mt-4 p-3.5">
+          <b>Este pase es para el {longDateLabel(view.slotStart)}.</b>
+          <p className="mt-1 text-sm">Solo se puede marcar la llegada ese día.</p>
+        </Panel>
+      ) : usedAt === null ? (
         <div className="px-5">
           <Button className="mt-3.5" onClick={checkIn} disabled={pending}>
             {pending ? 'Marcando…' : 'Marcar que llegó'}
@@ -120,8 +127,8 @@ function Verdict({ view, onChange }: { readonly view: VerifyView; readonly onCha
         <Panel tone="note" as="div" role="status" className="mx-5 mt-4 p-3.5">
           <b>
             {reused === null
-              ? `Llegada registrada a las ${formatTime(usedAt)}.`
-              : `Este pase ya se usó hoy a las ${formatTime(reused)}.`}
+              ? `Llegada registrada ${atLabel(usedAt)}.`
+              : `Este pase ya se usó ${atLabel(reused)}.`}
           </b>
           <p className="mt-1 text-sm text-muted">{SINGLE_USE_NOTE}</p>
         </Panel>

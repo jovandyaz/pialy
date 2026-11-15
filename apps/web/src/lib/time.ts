@@ -26,6 +26,13 @@ export function isoDateOf(instant: Date): string {
   return new Intl.DateTimeFormat('en-CA', { timeZone: BUSINESS_TIME_ZONE }).format(instant);
 }
 
+/** `hoy a las 10:55` on the current business day, `el Jue 19 nov a las 10:55` otherwise. */
+export function atLabel(instant: string | Date, now: Date = new Date()): string {
+  const date = new Date(instant);
+  const day = isoDateOf(date) === isoDateOf(now) ? 'hoy' : `el ${shortDateLabel(date)}`;
+  return `${day} a las ${formatTime(date)}`;
+}
+
 export function nextDays(count: number, now: Date = new Date()): string[] {
   return Array.from({ length: count }, (_, i) => isoDateOf(new Date(now.getTime() + i * MS_PER_DAY)));
 }
