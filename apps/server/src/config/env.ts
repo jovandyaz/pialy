@@ -29,6 +29,8 @@ const envSchema = z
     COOKIE_SECRET: optionalString.pipe(z.string().min(32, 'must be at least 32 characters').optional()),
     PHONE_HASH_SALT: optionalString,
     PUBLIC_BASE_URL: optionalString,
+    /** Built SPA directory; defaults to `apps/web/dist` next to this package. */
+    WEB_ROOT: optionalString,
     DEMO_DEPOSIT_CENTS: z.coerce
       .number()
       .pipe(z.literal(DEMO_DEPOSIT_CENTS, 'DEMO_DEPOSIT_CENTS must be 1'))

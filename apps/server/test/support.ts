@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { RailConnector } from '@pialy/payments';
 import { sql } from 'drizzle-orm';
 import { loadEnv } from '../src/config/env.js';
@@ -39,6 +41,7 @@ export function testDeps(handle: DbHandle, overrides: Partial<AppDeps> = {}): Ap
     clock: { now: () => new Date('2026-11-14T12:00:00Z') },
     env: loadEnv({ NODE_ENV: 'test', DATABASE_URL: TEST_DATABASE_URL, PHONE_HASH_SALT: 'test-phone-hash-salt',
       BUSINESS_PIN: TEST_PIN,
+      WEB_ROOT: join(tmpdir(), 'pialy-no-web-build'), // keep API tests independent of a web build
       COOKIE_SECRET: 'test-cookie-secret-test-cookie-secret',
     }),
     hub: createSseHub(),

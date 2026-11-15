@@ -6,6 +6,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import type { Env } from './config/env.js';
 import { createOwnerAuth } from './http/auth.js';
 import { problemErrorHandler, problemNotFoundHandler } from './http/problem.js';
+import { defaultWebRoot, registerWeb } from './http/web.js';
 import { boardRoutes } from './http/routes/board.js';
 import { bookingRoutes } from './http/routes/bookings.js';
 import { eventRoutes } from './http/routes/events.js';
@@ -76,7 +77,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     secureCookie: deps.env.NODE_ENV === 'production',
   });
   app.setErrorHandler(problemErrorHandler);
-  app.setNotFoundHandler(problemNotFoundHandler);
+  if (!registerWeb(app, deps.env.WEB_ROOT ?? defaultWebRoot())) app.setNotFoundHandler(problemNotFoundHandler);
 
   app.get('/healthz', async (_request, reply) => {
     try {
