@@ -35,8 +35,10 @@ const EXAMPLE = {
   time: '11:15',
   bank: 'BBVA',
   phoneLast4: '5678',
-  reusedAt: '11:12',
 } as const;
+
+/** Every example screen shares one frame height, so screens shown side by side line up top and bottom. */
+const SCREEN_HEIGHT = 'h-[392px]';
 
 /** Example businesses: each sets its own deposit. Synthetic, always shown under an "Ejemplo" label. */
 interface BusinessExample {
@@ -62,8 +64,6 @@ const [FIRST_EXAMPLE, SCREENS_EXAMPLE] = EXAMPLES;
 function exampleFor(loop: SlotLoop): BusinessExample {
   return EXAMPLES[loop.cycle % EXAMPLES.length] ?? FIRST_EXAMPLE;
 }
-
-const LATE_REFUND: StatusLook = { tone: 'late', label: 'Devolución pendiente' };
 
 export function LandingPage() {
   useEffect(() => {
@@ -296,7 +296,7 @@ function CustomerPhone({ loop, example }: LoopProps) {
   if (loop.phase === LOOP_PHASE.paid) {
     return (
       <Device caption={CUSTOMER_CAPTION}>
-        <div key={loop.cycle} className="h-[392px] animate-rise">
+        <div key={loop.cycle} className={cn(SCREEN_HEIGHT, 'animate-rise')}>
           <PassHeader business={example.business} />
           <PassTime example={example} />
           <QrCode value={EXAMPLE_QR_VALUE} label="QR ilustrativo" className="mx-auto mt-3 size-32" />
@@ -307,7 +307,7 @@ function CustomerPhone({ loop, example }: LoopProps) {
   }
   return (
     <Device caption={CUSTOMER_CAPTION}>
-      <div className="h-[392px]">
+      <div className={SCREEN_HEIGHT}>
         <div className="flex items-center justify-between border-b border-ink px-4 pt-3.5 pb-2.5">
           <span className="text-[15px] font-extrabold font-stretch-105%">{example.business}</span>
           <Numeral size="mark" tone="brand">
@@ -370,7 +370,7 @@ function OwnerAgenda({ loop, example }: LoopProps) {
   const paidCount = AGENDA_BEFORE.length + (paid ? 1 : 0);
   return (
     <Device caption="Tu negocio · la agenda">
-      <div className="relative flex h-[392px] flex-col">
+      <div className={cn(SCREEN_HEIGHT, 'relative flex flex-col')}>
         <div className="border-b-2 border-ink px-4 pt-3.5 pb-3">
           <b className="text-base font-extrabold font-stretch-105%">Hoy · {EXAMPLE.boardDay}</b>
           <div className="mt-1.5 flex gap-4 text-[13px] text-muted">
@@ -519,30 +519,38 @@ function TwoScreens() {
             <Point title="En la puerta, un escaneo">El pase se marca una sola vez al llegar. Confirma el pago de la cita, no la identidad.</Point>
           </ul>
         </div>
-        <div role="group" aria-label="Ejemplo de las dos pantallas" className="grid gap-6 sm:grid-cols-2 lg:grid-cols-[340px_300px]">
+        <div role="group" aria-label="Ejemplo de las dos pantallas" className="grid gap-6 sm:grid-cols-2 lg:grid-cols-[repeat(2,320px)]">
           <div>
             <Label className="mb-2 block">Ejemplo</Label>
             <OwnerAgenda loop={PAID_LOOP} example={SCREENS_EXAMPLE} />
           </div>
           <div>
             <Label className="mb-2 block">Ejemplo</Label>
-            <Device caption="Tu cliente · su pase">
-              <PassHeader business={SCREENS_EXAMPLE.business} />
-              <PassTime example={SCREENS_EXAMPLE} />
-              <QrCode value={EXAMPLE_QR_VALUE} label="QR ilustrativo del pase" className="mx-auto mt-3 size-28" />
-              <KeyValues
-                className="mx-4 mt-2 mb-3"
-                rows={[
-                  ['Anticipo', `${SCREENS_EXAMPLE.deposit} MXN`],
-                  ['Banco', EXAMPLE.bank],
-                  ['Celular', `··${EXAMPLE.phoneLast4}`],
-                ]}
-              />
-            </Device>
+            <ExamplePass example={SCREENS_EXAMPLE} />
           </div>
         </div>
       </div>
     </section>
+  );
+}
+
+/** The customer's pass, sized to the agenda's frame: the QR takes whatever height is left between the time and the details. */
+function ExamplePass({ example }: { readonly example: BusinessExample }) {
+  return (
+    <Device caption="Tu cliente · su pase">
+      <div className={cn(SCREEN_HEIGHT, 'flex flex-col')}>
+        <PassHeader business={example.business} />
+        <PassTime example={example} />
+        <QrCode value={EXAMPLE_QR_VALUE} label="QR ilustrativo del pase" className="m-auto size-22" />
+        <KeyValues
+          className="mx-4 mb-3"
+          rows={[
+            ['Anticipo', `${example.deposit} MXN`],
+            ['Celular', `··${EXAMPLE.phoneLast4}`],
+          ]}
+        />
+      </div>
+    </Device>
   );
 }
 
@@ -555,28 +563,19 @@ function Point({ title, children }: { readonly title: string; readonly children:
   );
 }
 
-const CASES: readonly { readonly look: StatusLook; readonly title: string; readonly body: string }[] = [
+/** Owner-facing promises, benefit first; the mechanics behind each one live in the README, not here. */
+const CASES = [
+  { title: 'Si te pagan tarde, no pierdes la cita', body: 'Si el horario sigue libre, la cita se confirma igual.' },
   {
-    look: bookingLook(STATUS.confirmed, true),
-    title: 'Pago tardío',
-    body: 'Si el banco confirma después de los 6 minutos y el horario sigue libre, la cita se confirma marcada como tardía.',
+    title: 'Ningún pago se pierde ni se cuenta doble',
+    body: 'Si alguien paga dos veces, o paga un horario que ya se ocupó, tu agenda te dice qué devolver.',
   },
-  {
-    look: LATE_REFUND,
-    title: 'Pago repetido o sobre un horario ya ocupado',
-    body: 'Tu agenda lo marca con devolución pendiente para regresarlo por SPEI. No se pierde ni se cuenta dos veces.',
-  },
-  {
-    look: bookingLook(STATUS.expired, false),
-    title: 'Apartado vencido',
-    body: 'Antes de liberar el horario, Pialy le pregunta al banco si el pago llegó.',
-  },
-  {
-    look: bookingLook(STATUS.checkedIn, false),
-    title: 'Pase usado dos veces',
-    body: `La segunda lectura se rechaza y dice cuándo se usó: «Este pase ya se usó hoy a las ${EXAMPLE.reusedAt}».`,
-  },
-];
+  { title: 'Un horario pagado no se libera por error', body: 'Antes de ofrecerlo a alguien más, Pialy revisa que nadie lo haya pagado.' },
+  { title: 'Cada pase sirve para una sola visita', body: 'Si alguien vuelve a mostrar el mismo pase, al escanearlo ves que ya se usó y a qué hora.' },
+] as const;
+
+/** Promise beside its explanation; on desktop the promise column hugs the longest promise so each row reads as one line. */
+const CASE_ROW_COLUMNS = 'sm:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] lg:grid-cols-[400px_minmax(0,1fr)]';
 
 function HardCases() {
   return (
@@ -587,13 +586,10 @@ function HardCases() {
           {CASES.map((item) => (
             <li
               key={item.title}
-              className="grid gap-x-6 gap-y-1.5 border-b border-brand/35 py-4 sm:grid-cols-[200px_minmax(0,1fr)] lg:grid-cols-[220px_320px_minmax(0,1fr)] lg:items-baseline"
+              className={cn('grid gap-x-6 gap-y-1 border-b border-brand/35 py-4 sm:items-baseline lg:py-5', CASE_ROW_COLUMNS)}
             >
-              <span>
-                <StatusTag look={item.look} />
-              </span>
-              <b className="text-[17px]">{item.title}</b>
-              <span className="text-[15px] text-muted sm:col-start-2 lg:col-start-auto">{item.body}</span>
+              <b className="text-[17px] lg:text-lg">{item.title}</b>
+              <span className="text-[15px] text-muted">{item.body}</span>
             </li>
           ))}
         </ul>
@@ -651,22 +647,12 @@ function Close() {
 function SiteFooter() {
   return (
     <footer className="border-t-2 border-ink bg-paper">
-      <div className={cn(shell, 'grid gap-6 py-8 sm:grid-cols-[auto_minmax(0,1fr)] sm:items-end sm:gap-x-8 lg:py-10')}>
+      <div className={cn(shell, 'flex flex-col gap-4 py-8 sm:flex-row sm:items-baseline sm:gap-8 lg:py-10')}>
         <Numeral size="sheet" tone="brand" className="text-[48px] leading-[0.8]">
           pialy
         </Numeral>
-        <div className="grid gap-1 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end sm:gap-x-6">
-          <p className="text-sm">
-            <b className="block text-[15px]">Tu lugar, guardado al instante.</b>
-            <span className="text-muted">
-              Del náhuatl <i>pialli</i>: «depósito, cosa guardada».
-            </span>
-          </p>
-          <p className="text-sm text-muted sm:text-right">
-            Hecho en CDMX
-            <span className="block">© 2026 Pialy</span>
-          </p>
-        </div>
+        <p className="text-[15px] font-bold sm:flex-1">Citas con anticipo para tu negocio.</p>
+        <p className="text-sm text-muted">© 2026 Pialy</p>
       </div>
     </footer>
   );
