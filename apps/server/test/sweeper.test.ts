@@ -17,7 +17,10 @@ import { seedDemo } from '../src/infrastructure/db/seed.js';
 import { createDrizzleUnitOfWork } from '../src/infrastructure/payments/drizzle-unit-of-work.js';
 import { paymentReaction } from '../src/infrastructure/payments/payment-reaction.js';
 import {
+  FAILURE_COOLDOWN_MS,
   LATE_WATCH_EVERY_TICKS,
+  OUTBOX_CLEANUP_BATCH,
+  OUTBOX_RETENTION_MS,
   SWEEP_LOCK_KEY,
   isLateWatchTick,
   runSweep,
@@ -315,6 +318,64 @@ describe('runSweep: awaiting attempts past expiry', () => {
       sql`select count(*)::int as n from pg_locks where locktype = 'advisory' and objid = ${SWEEP_LOCK_KEY}`,
     )) as unknown as [{ n: number }];
     expect(row.n).toBe(0);
+  });
+
+  it('rests an attempt that failed for a minute, so a poison attempt cannot starve the others', async () => {
+    const poison = await hold({ tx: TX });
+    const fine = await hold({ tx: OTHER_TX, phone: OTHER_PHONE, slot: OTHER_SLOT });
+    const rail = {
+      findPayments: vi.fn<PaymentFinder['findPayments']>((ref) =>
+        'transactionId' in ref && ref.transactionId === TX ? Promise.reject(new TypeError('bug')) : Promise.resolve([]),
+      ),
+    };
+    let now = NEXT_TICK;
+    const sweeper: SweepDeps = { ...deps(rail, NEXT_TICK), clock: { now: () => now } };
+
+    expect(await runSweep(sweeper)).toEqual({ checked: 2 });
+    expect(await bookingOf(fine)).toMatchObject({ status: 'expired' });
+
+    now = new Date(NEXT_TICK.getTime() + FAILURE_COOLDOWN_MS - 1000);
+    expect(await runSweep(sweeper)).toEqual({ checked: 0 });
+
+    now = new Date(NEXT_TICK.getTime() + FAILURE_COOLDOWN_MS + 1000);
+    expect(await runSweep(sweeper)).toEqual({ checked: 1 });
+    expect(rail.findPayments).toHaveBeenCalledTimes(3);
+    expect(await bookingOf(poison)).toMatchObject({ status: 'holding' });
+  });
+
+  it('deletes outbox rows published over 24 h ago, at most one batch per tick, keeping the rest', async () => {
+    const old = new Date(NEXT_TICK.getTime() - OUTBOX_RETENTION_MS - MINUTE_MS);
+    const recent = new Date(NEXT_TICK.getTime() - OUTBOX_RETENTION_MS + MINUTE_MS);
+    const row = (publishedAt: Date | null) => ({ topic: 'booking.confirmed', payload: {}, publishedAt });
+    await db.insert(outbox).values([
+      ...Array.from({ length: OUTBOX_CLEANUP_BATCH + 5 }, () => row(old)),
+      row(recent),
+      row(null),
+    ]);
+    const count = async () => (await db.select({ id: outbox.id }).from(outbox)).length;
+
+    await runSweep(deps(railReturning(), NEXT_TICK));
+    expect(await count()).toBe(5 + 2);
+
+    await runSweep(deps(railReturning(), NEXT_TICK));
+    expect(await count()).toBe(2);
+  });
+
+  it('leaves the outbox alone while another instance holds the cluster lock', async () => {
+    await db.insert(outbox).values({
+      topic: 'booking.confirmed',
+      payload: {},
+      publishedAt: new Date(NEXT_TICK.getTime() - OUTBOX_RETENTION_MS - MINUTE_MS),
+    });
+    const other = await handle.client.reserve();
+    try {
+      await other`select pg_advisory_lock(${SWEEP_LOCK_KEY}::bigint)`;
+      await runSweep(deps(railReturning(), NEXT_TICK));
+      expect(await db.select().from(outbox)).toHaveLength(1);
+      await other`select pg_advisory_unlock(${SWEEP_LOCK_KEY}::bigint)`;
+    } finally {
+      other.release();
+    }
   });
 
   it('stops between attempts once asked to', async () => {

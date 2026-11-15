@@ -303,6 +303,7 @@ describe('abuse limits on POST /api/bookings', () => {
 
     expect(replay.statusCode).toBe(502);
     expect(fourth.statusCode).toBe(429);
+    expect(fourth.headers['retry-after']).toBe('600');
     expect(fourth.headers['content-type']).toContain(PROBLEM);
     expect(fourth.json()).toMatchObject({
       type: 'urn:pialy:problem:phone-rate-limited',

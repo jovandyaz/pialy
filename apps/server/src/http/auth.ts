@@ -20,6 +20,7 @@ const PIN_ATTEMPTS = { max: 5, timeWindow: 10 * 60_000 } as const;
 const PIN_LIMIT_DETAIL = 'Demasiados intentos. Espera unos minutos.';
 /** Wrong PINs from all IPs together: caps a botnet that rotates addresses to dodge the per-IP limit. */
 const GLOBAL_FAILED_PINS = { max: 20, windowMs: 10 * 60_000 } as const;
+const LOCKOUT_LOG = 'owner login locked: global failed-PIN cap reached';
 const pinBody = z.strictObject({ pin: z.string().min(1).max(128) });
 
 export interface OwnerAuthConfig {
@@ -46,11 +47,16 @@ export function createOwnerAuth(config: OwnerAuthConfig): OwnerAuth {
   const expectedPin = digest(config.pin);
   // In memory, so per instance; entries older than the window are dropped on each use.
   let failedAt: number[] = [];
+  // One warn line per lockout window, not one per rejected request.
+  let lockLogged = false;
 
-  function lockedOut(): boolean {
+  function lockedOut(log: { warn(message: string): void }): boolean {
     const cutoff = clock.now().getTime() - GLOBAL_FAILED_PINS.windowMs;
     failedAt = failedAt.filter((at) => at > cutoff);
-    return failedAt.length >= GLOBAL_FAILED_PINS.max;
+    const locked = failedAt.length >= GLOBAL_FAILED_PINS.max;
+    if (locked && !lockLogged) log.warn(LOCKOUT_LOG);
+    lockLogged = locked;
+    return locked;
   }
 
   function isOwner(request: FastifyRequest): boolean {
@@ -93,7 +99,7 @@ export function createOwnerAuth(config: OwnerAuthConfig): OwnerAuth {
     app.post('/api/session', { config: { rateLimit: PIN_ATTEMPTS } }, async (request, reply) => {
       const body = pinBody.safeParse(request.body);
       if (!body.success) return sendProblem(reply, HTTP_BAD_REQUEST, 'Escribe tu PIN');
-      if (lockedOut()) return sendProblem(reply, HTTP_TOO_MANY_REQUESTS, PIN_LIMIT_DETAIL);
+      if (lockedOut(request.log)) return sendProblem(reply, HTTP_TOO_MANY_REQUESTS, PIN_LIMIT_DETAIL);
       if (!timingSafeEqual(digest(body.data.pin), expectedPin)) {
         failedAt.push(clock.now().getTime());
         return sendProblem(reply, HTTP_UNAUTHORIZED, 'PIN incorrecto');

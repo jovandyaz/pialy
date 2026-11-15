@@ -17,6 +17,7 @@ import {
   ActiveHoldExistsError,
   BookingNotFoundError,
   BookingNotHoldingError,
+  PHONE_HOLD_LIMIT,
   SlotTakenError,
   TooManyAttemptsError,
   TooManyHoldsForPhoneError,
@@ -72,6 +73,8 @@ interface DomainProblem {
   readonly status: number;
   readonly type: string;
   readonly detail: string;
+  /** Seconds sent as `Retry-After`. */
+  readonly retryAfterSeconds?: number;
 }
 
 const problems: readonly (readonly [new (...args: never[]) => Error, DomainProblem])[] = [
@@ -102,6 +105,8 @@ const problems: readonly (readonly [new (...args: never[]) => Error, DomainProbl
       status: HTTP_TOO_MANY_REQUESTS,
       type: 'urn:pialy:problem:phone-rate-limited',
       detail: 'Demasiados intentos con este número',
+      // The exact wait depends on the oldest hold in the window; the full window is a safe bound.
+      retryAfterSeconds: PHONE_HOLD_LIMIT.windowMinutes * 60,
     },
   ],
   [
@@ -214,5 +219,6 @@ function sendDomainProblem(reply: FastifyReply, error: unknown): FastifyReply {
   const match = problems.find(([type]) => error instanceof type);
   if (match === undefined) throw error;
   const [, problem] = match;
+  if (problem.retryAfterSeconds !== undefined) void reply.header('retry-after', String(problem.retryAfterSeconds));
   return sendProblem(reply, problem.status, problem.detail, problem.type);
 }

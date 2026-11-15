@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { get } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { Writable } from 'node:stream';
 import { eq, sql } from 'drizzle-orm';
 import type { FastifyInstance } from 'fastify';
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -123,6 +124,28 @@ describe('owner session', () => {
 
     now = new Date(NOW.getTime() + 10 * 60_000 + 1);
     expect((await from('10.0.1.2', TEST_PIN)).statusCode).toBe(204);
+  });
+
+  it('logs one warn line, without the PIN or any IP, when the global failed-PIN cap trips', async () => {
+    const lines: string[] = [];
+    const logStream = new Writable({
+      write(chunk: Buffer, _enc, cb) {
+        lines.push(...chunk.toString().split('\n'));
+        cb();
+      },
+    });
+    current = buildApp(testDeps(handle, { logStream }));
+    const app = current;
+    const from = (ip: string, pin: string) =>
+      app.inject({ method: 'POST', url: '/api/session', headers: { 'x-real-ip': ip }, payload: { pin } });
+    for (let i = 1; i <= 20; i += 1) await from(`10.0.0.${i}`, 'wrong-pin-secret');
+    for (let i = 1; i <= 3; i += 1) expect((await from(`10.0.1.${i}`, 'wrong-pin-secret')).statusCode).toBe(429);
+
+    const locked = lines.filter((line) => line.includes('owner login locked: global failed-PIN cap reached'));
+    expect(locked).toHaveLength(1);
+    expect(JSON.parse(locked[0] ?? '{}')).toMatchObject({ level: 40 });
+    expect(locked[0]).not.toContain('wrong-pin-secret');
+    expect(locked[0]).not.toContain('10.0.');
   });
 
   it('sets a signed httpOnly SameSite=Strict cookie that lasts 12 hours', async () => {
