@@ -89,10 +89,21 @@ const flagSchema = z.object({
 });
 export type Flag = z.infer<typeof flagSchema>;
 
+/** A deposit confirmed in the last minutes, for any day: the board announces each one once. */
+const recentlyPaid = z.object({
+  token: z.string(),
+  slotStart: isoInstant,
+  customerName: z.string().nullable(),
+  bankName: z.string().nullable(),
+  confirmedAt: isoInstant,
+});
+export type RecentlyPaid = z.infer<typeof recentlyPaid>;
+
 export const boardSchema = z.object({
   date: z.string(),
   slots: z.array(slotRange.extend({ booking: ownerBooking.nullable() })),
   flags: z.array(flagSchema),
+  recent: z.array(recentlyPaid),
 });
 export type Board = z.infer<typeof boardSchema>;
 export type BoardSlot = Board['slots'][number];

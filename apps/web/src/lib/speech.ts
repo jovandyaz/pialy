@@ -12,6 +12,7 @@ export function speak(text: string): void {
   window.speechSynthesis.speak(utterance);
 }
 
-export function paymentAnnouncement(time: string): string {
-  return `Anticipo recibido, cita de las ${time}`;
+/** `day` names the slot's day when it is not today's. */
+export function paymentAnnouncement(time: string, day: string | null = null): string {
+  return day === null ? `Anticipo recibido, cita de las ${time}` : `Anticipo recibido, cita del ${day} a las ${time}`;
 }

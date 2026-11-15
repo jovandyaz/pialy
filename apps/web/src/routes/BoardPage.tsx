@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { api, API_PATH, FLAG_KIND, STATUS, type Board, type BoardSlot, type BookingStatus, type Flag, type OwnerBooking } from '../api';
+import { api, API_PATH, FLAG_KIND, STATUS, type Board, type BoardSlot, type Flag, type OwnerBooking, type RecentlyPaid } from '../api';
 import { ErrorNote, Loading, Screen } from '../components/Screen';
 import { ScanIcon, SoundIcon } from '../components/icons';
 import { Button } from '../components/ui/Button';
@@ -14,7 +14,7 @@ import { redirectIfLoggedOut } from '../lib/owner';
 import { errorDetail, failed, loading, ready, REMOTE, type Remote } from '../lib/remote';
 import { navigate, ROUTES, useDocumentTitle } from '../lib/router';
 import { paymentAnnouncement, speak, speechAvailable } from '../lib/speech';
-import { boardDayLabel, formatTime, isoDateOf } from '../lib/time';
+import { boardDayLabel, formatTime, isoDateOf, longDateLabel } from '../lib/time';
 import { isPollTick, useEventStream, type StreamHint } from '../useEventStream';
 import { bookingLook, FREE_LOOK, flagTitle, isDuplicatePayment, isPaid, needsRefund } from '../ui/status';
 
@@ -24,23 +24,24 @@ const NOTE_MAX_LENGTH = 500;
 
 interface Toast {
   readonly time: string;
+  /** The slot's day, only when it is not the board's day. */
+  readonly day: string | null;
   readonly name: string | null;
 }
 
-type StatusSnapshot = ReadonlyMap<string, BookingStatus>;
-
-/** Bookings that became confirmed since the last snapshot; the first snapshot announces nothing. */
-export function newlyPaid(previous: StatusSnapshot | null, board: Board): OwnerBooking[] {
-  if (previous === null) return [];
-  return board.slots.flatMap(({ booking }) => {
-    if (booking === null || booking.status !== STATUS.confirmed) return [];
-    const before = previous.get(booking.token);
-    return before !== undefined && isPaid(before) ? [] : [booking];
-  });
+/** Deposits in `recent` not announced yet, whatever their day; the first board load announces nothing. */
+export function newlyPaid(announced: ReadonlySet<string> | null, recent: readonly RecentlyPaid[]): RecentlyPaid[] {
+  if (announced === null) return [];
+  return recent.filter((paid) => !announced.has(paid.token));
 }
 
-function snapshot(board: Board): StatusSnapshot {
-  return new Map(board.slots.flatMap(({ booking }) => (booking === null ? [] : [[booking.token, booking.status] as const])));
+function isOnDay(instant: string, isoDate: string): boolean {
+  return isoDateOf(new Date(instant)) === isoDate;
+}
+
+function toastText({ name, day }: Toast): string {
+  const text = name === null ? 'Anticipo recibido' : `Anticipo recibido de ${name}`;
+  return day === null ? text : `${text} · cita del ${day}`;
 }
 
 export function BoardPage() {
@@ -54,20 +55,25 @@ export function BoardPage() {
   const [scanOpen, setScanOpen] = useState(false);
   const [resolving, setResolving] = useState<Flag | null>(null);
   const [resolveOpen, setResolveOpen] = useState(false);
-  const seen = useRef<StatusSnapshot | null>(null);
+  const announced = useRef<ReadonlySet<string> | null>(null);
   const soundRef = useRef(soundOn);
   useEffect(() => {
     soundRef.current = soundOn;
   }, [soundOn]);
 
-  const announce = useCallback((paid: readonly OwnerBooking[]) => {
+  const announce = useCallback((paid: readonly RecentlyPaid[], boardDate: string) => {
     const last = paid.at(-1);
     if (last === undefined) return;
     setFlashing(new Set(paid.map((b) => b.token)));
     setTimeout(() => setFlashing(new Set()), FLASH_MS);
-    setToast({ time: formatTime(last.slotStart), name: last.customerName });
+    const lastDay = isOnDay(last.slotStart, boardDate) ? null : boardDayLabel(isoDateOf(new Date(last.slotStart)));
+    setToast({ time: formatTime(last.slotStart), day: lastDay, name: last.customerName });
     setTimeout(() => setToast(null), TOAST_MS);
-    if (soundRef.current) for (const booking of paid) speak(paymentAnnouncement(formatTime(booking.slotStart)));
+    if (!soundRef.current) return;
+    for (const booking of paid) {
+      const day = isOnDay(booking.slotStart, boardDate) ? null : longDateLabel(booking.slotStart).toLowerCase();
+      speak(paymentAnnouncement(formatTime(booking.slotStart), day));
+    }
   }, []);
 
   const inFlight = useRef(false);
@@ -87,8 +93,9 @@ export function BoardPage() {
       .then((data) => {
         if (isStale()) return;
         setDate(today);
-        announce(newlyPaid(seen.current, data));
-        seen.current = snapshot(data);
+        announce(newlyPaid(announced.current, data.recent), today);
+        // A deposit leaves `recent` only by aging out, never to return, so remembering this list is enough.
+        announced.current = new Set(data.recent.map((paid) => paid.token));
         setBoard(ready(data));
       })
       .catch((error: unknown) => {
@@ -187,7 +194,7 @@ export function BoardPage() {
           {toast === null ? null : (
             <div className="flex animate-rise items-center gap-3 rounded-sm bg-paid px-4 py-3.5 font-bold text-paper">
               <Numeral size="toast">{toast.time}</Numeral>
-              <span>{toast.name === null ? 'Anticipo recibido' : `Anticipo recibido de ${toast.name}`}</span>
+              <span>{toastText(toast)}</span>
             </div>
           )}
         </div>
