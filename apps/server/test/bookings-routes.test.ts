@@ -229,7 +229,7 @@ describe('POST /api/bookings', () => {
 
     expect(res.statusCode).toBe(502);
     expect(res.headers['content-type']).toContain(PROBLEM);
-    expect(res.json()).toMatchObject({ detail: 'No pudimos enviar la solicitud. Intenta de nuevo o paga con QR.' });
+    expect(res.json()).toMatchObject({ detail: 'No pudimos enviar la solicitud. Intenta de nuevo.' });
     expect(replay.statusCode).toBe(502);
     expect(replay.body).toBe(res.body);
     const out = logs.text();

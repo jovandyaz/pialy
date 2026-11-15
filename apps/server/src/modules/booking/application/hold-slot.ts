@@ -19,7 +19,7 @@ import type { BookableBusiness } from './business.js';
 export const HOLD_SCOPE = 'hold';
 /** What the payer's bank shows for the deposit, on a push and on a QR alike. */
 export const DEPOSIT_CONCEPT = 'Anticipo Estudio Demo';
-export const PUSH_FAILED_DETAIL = 'No pudimos enviar la solicitud. Intenta de nuevo o paga con QR.';
+export const PUSH_FAILED_DETAIL = 'No pudimos enviar la solicitud. Intenta de nuevo.';
 export const PUSH_FAILED_TYPE = 'urn:pialy:problem:push-failed';
 
 /**

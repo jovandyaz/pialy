@@ -318,7 +318,7 @@ describe('holdSlotAndCharge', () => {
       status: 502,
       body: { type: 'urn:pialy:problem:push-failed', title: 'Bad Gateway', status: 502, detail: PUSH_FAILED_DETAIL },
     });
-    expect(PUSH_FAILED_DETAIL).toBe('No pudimos enviar la solicitud. Intenta de nuevo o paga con QR.');
+    expect(PUSH_FAILED_DETAIL).toBe('No pudimos enviar la solicitud. Intenta de nuevo.');
     const booking = await onlyBooking();
     expect(booking.status).toBe('expired');
     const [attempt] = await db.select().from(paymentAttempts);
