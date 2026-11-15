@@ -4,7 +4,7 @@ import { Numeral } from './ui/Numeral';
 
 export function Screen({ children, wide = false, className }: { readonly children: ReactNode; readonly wide?: boolean; readonly className?: string }) {
   return (
-    <div className="grid-bg min-h-dvh">
+    <div className="dot-bg min-h-dvh">
       <main className={cn('mx-auto flex min-h-dvh w-full flex-col bg-paper sm:border-x sm:border-ink', wide ? 'max-w-2xl' : 'max-w-md', className)}>
         {children}
       </main>

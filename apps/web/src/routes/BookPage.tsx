@@ -68,7 +68,7 @@ export function BookPage() {
   return (
     <Screen>
       <TopBar title={BUSINESS.name} />
-      <div className="grid-bg flex-1 p-5">
+      <div className="dot-bg flex-1 p-5">
         <h1 className="text-[28px] leading-[1.05] font-extrabold tracking-[-0.02em] font-stretch-108%">Aparta tu cita</h1>
         <p className="mt-1.5 text-base text-muted">Paga un anticipo con CoDi desde tu banco. Sin cuenta, sin tarjeta.</p>
         <div className="flex items-baseline justify-between border-b border-brand/35 py-3.5">

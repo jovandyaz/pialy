@@ -98,7 +98,7 @@ function SiteHeader() {
 
 function Hero({ loop }: { readonly loop: SlotLoop }) {
   return (
-    <section aria-labelledby="hero-title" className="grid-bg border-b border-ink">
+    <section aria-labelledby="hero-title" className="dot-bg border-b border-ink">
       <div className={cn(shell, 'grid gap-8 pt-5 pb-10 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center lg:gap-14 lg:py-20')}>
         <div className="max-w-xl">
           <Label className="text-brand">Tu lugar, guardado al instante</Label>
@@ -407,7 +407,7 @@ const STEPS = [
 
 function HowItWorks() {
   return (
-    <section aria-labelledby="how-title" className="grid-bg border-b border-ink">
+    <section aria-labelledby="how-title" className="dot-bg border-b border-ink">
       <div className={cn(shell, 'py-12 lg:py-20')}>
         <SectionHeading id="how-title" eyebrow="Cómo funciona">
           Una cita que no llega es una hora que ya no vendes.
@@ -556,7 +556,7 @@ function Proof() {
 
 function Close() {
   return (
-    <section aria-labelledby="close-title" className="grid-bg">
+    <section aria-labelledby="close-title" className="dot-bg">
       <div className={cn(shell, 'py-14 lg:py-24')}>
         <div className="max-w-2xl border border-ink bg-paper p-5 lg:p-10">
           <Numeral size="sheet" tone="brand" className="block text-[112px] leading-[0.82] tracking-tight lg:text-[176px]">

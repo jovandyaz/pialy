@@ -11,7 +11,7 @@
   --color-ink: #0b0d12;
   --color-paper: #ffffff;
   --color-muted: #4f586b;
-  --color-grid: #d6deff;
+  --color-dot: #c3cefd;
   --color-brand: #2448f5;
   --color-brand-wash: #e9eeff;
   --color-paid: #0a7a3b;
@@ -76,13 +76,10 @@
 }
 
 @layer components {
-  /* The visible Retícula: a pale 32px grid behind the booking screen. */
-  .grid-bg {
-    background-image:
-      linear-gradient(var(--color-grid) 1px, transparent 1px),
-      linear-gradient(90deg, var(--color-grid) 1px, transparent 1px);
-    background-size: 32px 32px;
-    background-position: -1px -1px;
+  /* The dot matrix: the unlit panel that the Doto numerals light up. Sparse dots keep text on near-white. */
+  .dot-bg {
+    background-image: radial-gradient(circle, var(--color-dot) 1.5px, transparent 1.75px);
+    background-size: 16px 16px;
   }
   /* A slot someone already paid: hatched, never clickable. */
   .hatched {
