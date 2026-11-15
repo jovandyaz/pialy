@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, API_PATH, FLAG_KIND, STATUS, type Board, type BoardSlot, type Flag, type OwnerBooking, type RecentlyPaid } from '../api';
+import { PassScanner } from '../components/PassScanner';
 import { ErrorNote, Loading, Screen } from '../components/Screen';
 import { ScanIcon, SoundIcon } from '../components/icons';
 import { Button } from '../components/ui/Button';
@@ -119,6 +120,11 @@ export function BoardPage() {
     else if (speechAvailable()) window.speechSynthesis.cancel();
   }
 
+  function openPass(token: string) {
+    setScanOpen(false);
+    navigate(ROUTES.verify(token));
+  }
+
   async function logout() {
     await api.logout().catch(() => undefined);
     navigate(ROUTES.login, { replace: true });
@@ -209,11 +215,7 @@ export function BoardPage() {
       </div>
 
       <Sheet open={scanOpen} onClose={() => setScanOpen(false)} label="Escanear pase">
-        <h2 className="text-2xl font-extrabold">Escanear pase</h2>
-        <p className="mt-2">Abre la cámara de tu celular y apunta al QR del pase del cliente. Se abre la verificación aquí mismo.</p>
-        <Button className="mt-4" onClick={() => setScanOpen(false)}>
-          Entendido
-        </Button>
+        {scanOpen ? <PassScanner onPass={openPass} onClose={() => setScanOpen(false)} /> : null}
       </Sheet>
 
       {resolving === null ? null : (
