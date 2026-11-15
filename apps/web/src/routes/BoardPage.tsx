@@ -157,7 +157,11 @@ export function BoardPage() {
           <span>
             <b className="text-base text-ink">{depositsTotal(paidCount)}</b> en anticipos
           </span>
-          <button type="button" onClick={logout} className="ml-auto cursor-pointer font-bold text-ink underline underline-offset-2">
+          <button
+            type="button"
+            onClick={logout}
+            className="-my-3 -mr-2 ml-auto inline-flex min-h-11 min-w-11 cursor-pointer items-center justify-center px-2 font-bold text-ink underline underline-offset-2"
+          >
             Salir
           </button>
         </div>
