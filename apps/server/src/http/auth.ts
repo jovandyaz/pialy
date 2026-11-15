@@ -1,0 +1,104 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
+import rateLimit, { normalizeIP } from '@fastify/rate-limit';
+import type { Clock } from '@pialy/payments';
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest, preHandlerAsyncHookHandler } from 'fastify';
+import { z } from 'zod';
+import { clientIp } from './client-ip.js';
+import { sendProblem } from './problem.js';
+
+export const OWNER_COOKIE = 'pialy_owner';
+export const SESSION_HOURS = 12;
+
+const MS_PER_HOUR = 3_600_000;
+const SESSION_MS = SESSION_HOURS * MS_PER_HOUR;
+const HTTP_NO_CONTENT = 204;
+const HTTP_BAD_REQUEST = 400;
+const HTTP_UNAUTHORIZED = 401;
+/** Per client IP; in memory, so per instance. Every attempt counts, right or wrong. */
+const PIN_ATTEMPTS = { max: 5, timeWindow: 10 * 60_000 } as const;
+const PIN_LIMIT_DETAIL = 'Demasiados intentos. Espera unos minutos.';
+const pinBody = z.strictObject({ pin: z.string().min(1).max(128) });
+
+export interface OwnerAuthConfig {
+  readonly pin: string;
+  readonly cookieSecret: string;
+  readonly clock: Clock;
+  /** `Secure` cookie; on in production. */
+  readonly secureCookie: boolean;
+}
+
+export interface OwnerAuth {
+  /** `preHandler` that answers 401 unless the request carries a live, untampered owner cookie. */
+  readonly requireOwner: preHandlerAsyncHookHandler;
+  readonly sessionRoutes: FastifyPluginAsync;
+}
+
+/**
+ * The business owner's session: a PIN exchanged for a signed, httpOnly, SameSite=Strict cookie.
+ * The cookie value is the issue time, so the 12 h lifetime is enforced here and not only by the
+ * browser. Requires `@fastify/cookie` (with `cookieSecret`) registered on the app beforehand.
+ */
+export function createOwnerAuth(config: OwnerAuthConfig): OwnerAuth {
+  const { clock } = config;
+  const expectedPin = digest(config.pin);
+
+  function isOwner(request: FastifyRequest): boolean {
+    const signed = request.cookies[OWNER_COOKIE];
+    if (signed === undefined) return false;
+    const unsigned = request.unsignCookie(signed);
+    if (!unsigned.valid || unsigned.value === null) return false;
+    const issuedAt = Number(unsigned.value);
+    const age = clock.now().getTime() - issuedAt;
+    return Number.isSafeInteger(issuedAt) && age >= 0 && age < SESSION_MS;
+  }
+
+  function issue(reply: FastifyReply): void {
+    void reply.setCookie(OWNER_COOKIE, String(clock.now().getTime()), {
+      signed: true,
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: config.secureCookie,
+      path: '/',
+      maxAge: SESSION_MS / 1000,
+    });
+  }
+
+  const requireOwner: preHandlerAsyncHookHandler = async (request, reply) => {
+    if (isOwner(request)) {
+      void reply.header('cache-control', 'no-store');
+      return;
+    }
+    return sendProblem(reply, HTTP_UNAUTHORIZED, 'Inicia sesión como dueño');
+  };
+
+  const sessionRoutes: FastifyPluginAsync = async (app) => {
+    await app.register(rateLimit, {
+      global: false,
+      keyGenerator: (request) => normalizeIP(clientIp(request)),
+      errorResponseBuilder: (_request, context) =>
+        Object.assign(new Error(PIN_LIMIT_DETAIL), { statusCode: context.statusCode }),
+    });
+
+    app.post('/api/session', { config: { rateLimit: PIN_ATTEMPTS } }, async (request, reply) => {
+      const body = pinBody.safeParse(request.body);
+      if (!body.success) return sendProblem(reply, HTTP_BAD_REQUEST, 'Escribe tu PIN');
+      if (!timingSafeEqual(digest(body.data.pin), expectedPin)) {
+        return sendProblem(reply, HTTP_UNAUTHORIZED, 'PIN incorrecto');
+      }
+      issue(reply);
+      return reply.status(HTTP_NO_CONTENT).send();
+    });
+
+    app.delete('/api/session', async (_request, reply) => {
+      void reply.clearCookie(OWNER_COOKIE, { path: '/' });
+      return reply.status(HTTP_NO_CONTENT).send();
+    });
+  };
+
+  return { requireOwner, sessionRoutes };
+}
+
+/** Fixed-length digests make the comparison constant time whatever the PIN's length. */
+function digest(value: string): Buffer {
+  return createHash('sha256').update(value).digest();
+}

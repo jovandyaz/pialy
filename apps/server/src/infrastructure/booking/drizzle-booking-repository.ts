@@ -311,7 +311,7 @@ export function bookingIn(bookingId: string, status: BookingStatus): SQL | undef
   return and(eq(bookings.id, bookingId), eq(bookings.status, status));
 }
 
-type BookingChange = Pick<typeof bookings.$inferInsert, 'status' | 'confirmedAt' | 'late'>;
+type BookingChange = Pick<typeof bookings.$inferInsert, 'status' | 'confirmedAt' | 'checkedInAt' | 'late'>;
 
 /** Every booking status change is announced to the board and to the booking's page in the same transaction. */
 export async function changeBooking(tx: DbTx, where: SQL | undefined, change: BookingChange): Promise<number> {

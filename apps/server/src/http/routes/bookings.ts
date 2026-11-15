@@ -1,7 +1,6 @@
-import { isIP } from 'node:net';
 import rateLimit, { normalizeIP } from '@fastify/rate-limit';
 import type { Clock, Money, RailConnector } from '@pialy/payments';
-import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyPluginAsync, FastifyReply } from 'fastify';
 import { z } from 'zod';
 import { PastDateError, getSlots } from '../../modules/booking/application/get-slots.js';
 import {
@@ -32,6 +31,7 @@ import {
 import { createDrizzleHoldRepository } from '../../infrastructure/booking/drizzle-booking-repository.js';
 import { createDrizzleQrAttemptRepository } from '../../infrastructure/booking/drizzle-qr-attempt-repository.js';
 import type { Db } from '../../infrastructure/db/client.js';
+import { clientIp } from '../client-ip.js';
 import { bookingTokenParam } from '../booking-token.js';
 import { PROBLEM_CONTENT_TYPE, sendProblem } from '../problem.js';
 
@@ -197,16 +197,6 @@ export const bookingRoutes: FastifyPluginAsync<BookingRoutesOptions> = async (ap
     return view;
   });
 };
-
-/**
- * Railway's edge sets `X-Real-IP` to the client's address (docs.railway.com, public networking
- * specs). The left-most `X-Forwarded-For` entry that `request.ip` trusts is client-controlled.
- */
-function clientIp(request: FastifyRequest): string {
-  const realIp = request.headers['x-real-ip'];
-  const candidate = typeof realIp === 'string' ? realIp.trim() : '';
-  return isIP(candidate) === 0 ? request.ip : candidate;
-}
 
 function acceptedIdempotencyKey(header: string | string[] | undefined): string | null {
   if (typeof header !== 'string') return null;

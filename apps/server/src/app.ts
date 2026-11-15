@@ -1,9 +1,12 @@
+import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import { money, type Clock, type RailConnector } from '@pialy/payments';
 import { sql } from 'drizzle-orm';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { Env } from './config/env.js';
+import { createOwnerAuth } from './http/auth.js';
 import { problemErrorHandler, problemNotFoundHandler } from './http/problem.js';
+import { boardRoutes } from './http/routes/board.js';
 import { bookingRoutes } from './http/routes/bookings.js';
 import { eventRoutes } from './http/routes/events.js';
 import { webhookRoutes } from './http/routes/webhooks.js';
@@ -30,6 +33,14 @@ export const LOG_REDACT_PATHS = [
   'headers["webhook-signature"]',
   'phone',
   'phoneNumber',
+  'pin',
+  '*.pin',
+  'req.headers.cookie',
+  'headers.cookie',
+  'BUSINESS_PIN',
+  'COOKIE_SECRET',
+  '*.BUSINESS_PIN',
+  '*.COOKIE_SECRET',
   '*.phone',
   '*.phoneNumber',
   'PEY_API_KEY',
@@ -41,6 +52,9 @@ export const LOG_REDACT_PATHS = [
 export function buildApp(deps: AppDeps): FastifyInstance {
   const phoneHashSalt = deps.env.PHONE_HASH_SALT;
   if (phoneHashSalt === undefined) throw new Error('PHONE_HASH_SALT is required to hash customer phones');
+  const { BUSINESS_PIN: pin, COOKIE_SECRET: cookieSecret } = deps.env;
+  if (pin === undefined) throw new Error('BUSINESS_PIN is required for the owner session');
+  if (cookieSecret === undefined) throw new Error('COOKIE_SECRET is required to sign the owner cookie');
   const app = Fastify({
     trustProxy: true, // behind Railway's proxy: real client IP for rate limits
     logger:
@@ -54,6 +68,13 @@ export function buildApp(deps: AppDeps): FastifyInstance {
   });
 
   void app.register(helmet);
+  void app.register(cookie, { secret: cookieSecret });
+  const auth = createOwnerAuth({
+    pin,
+    cookieSecret,
+    clock: deps.clock,
+    secureCookie: deps.env.NODE_ENV === 'production',
+  });
   app.setErrorHandler(problemErrorHandler);
   app.setNotFoundHandler(problemNotFoundHandler);
 
@@ -75,6 +96,8 @@ export function buildApp(deps: AppDeps): FastifyInstance {
     phoneHashSalt,
   });
 
+  void app.register(auth.sessionRoutes);
+  void app.register(boardRoutes, { db: deps.db, clock: deps.clock, hub: deps.hub, auth });
   void app.register(eventRoutes, { db: deps.db, hub: deps.hub });
   app.addHook('preClose', (done) => {
     deps.hub.closeAll();

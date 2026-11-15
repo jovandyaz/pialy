@@ -27,6 +27,33 @@ export class BookingNotFoundError extends Error {
   }
 }
 
+/** Only a `confirmed` booking can check in. */
+export class BookingNotConfirmedError extends Error {
+  override readonly name = 'BookingNotConfirmedError';
+
+  constructor() {
+    super('the booking has no confirmed deposit');
+  }
+}
+
+/** The pass was already used; `checkedInAt` is the first check-in. */
+export class AlreadyCheckedInError extends Error {
+  override readonly name = 'AlreadyCheckedInError';
+
+  constructor(readonly checkedInAt: Date) {
+    super('the booking already checked in');
+  }
+}
+
+/** No open flag has the given id (it does not exist or was already resolved). */
+export class FlagNotFoundError extends Error {
+  override readonly name = 'FlagNotFoundError';
+
+  constructor() {
+    super('no flag has this id');
+  }
+}
+
 /** The booking no longer waits for its deposit, so it takes no new payment attempt. */
 export class BookingNotHoldingError extends Error {
   override readonly name = 'BookingNotHoldingError';

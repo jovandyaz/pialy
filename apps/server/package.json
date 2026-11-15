@@ -13,6 +13,7 @@
     "db:seed": "node dist/seed.js"
   },
   "dependencies": {
+    "@fastify/cookie": "11.1.5",
     "@fastify/helmet": "13.2.0",
     "@fastify/rate-limit": "11.2.1",
     "@pialy/connector-pey": "workspace:*",

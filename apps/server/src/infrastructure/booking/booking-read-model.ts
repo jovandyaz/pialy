@@ -8,6 +8,7 @@ import type { Slot } from '../../modules/booking/domain/slots.js';
 import type { Db } from '../db/client.js';
 import { sanitized } from '../db/errors.js';
 import { bookings, business, paymentAttempts, paymentEvents, resources } from '../db/schema.js';
+import { bankNameOf } from '../../modules/booking/domain/banks.js';
 import { oneOf } from '../payments/drizzle-payment-repository.js';
 
 const ACTIVE_STATUSES = [BookingStatus.Holding, BookingStatus.Confirmed, BookingStatus.CheckedIn];
@@ -24,7 +25,12 @@ export interface BookingView {
   readonly holdExpiresAt: Date | null;
   readonly attempts: readonly { readonly mode: AttemptMode; readonly status: AttemptStatus }[];
   /** Present once the booking is paid. */
-  readonly pass?: { readonly time: Date; readonly phoneLast4: string; readonly trackingKey?: string };
+  readonly pass?: {
+    readonly time: Date;
+    readonly phoneLast4: string;
+    readonly bankName: string | null;
+    readonly trackingKey?: string;
+  };
 }
 
 /** The single business that takes bookings (seeded), with its first resource. */
@@ -107,6 +113,7 @@ export function findBookingView(db: Db, token: string): Promise<BookingView | nu
       pass: {
         time: booking.slotStart,
         phoneLast4: booking.phoneLast4,
+        bankName: intentId === null ? null : await firstBankName(db, intentId),
         ...(trackingKey === undefined ? {} : { trackingKey }),
       },
     };
@@ -121,4 +128,15 @@ async function firstTrackingKey(db: Db, intentId: string): Promise<string | unde
     .orderBy(asc(paymentEvents.createdAt))
     .limit(1);
   return event?.trackingKey ?? undefined;
+}
+
+/** The payer's bank, from `metadata.bankCode` of the intent's first payment event. */
+async function firstBankName(db: Db, intentId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ code: sql<string | null>`${paymentEvents.raw} #>> '{metadata,bankCode}'` })
+    .from(paymentEvents)
+    .where(eq(paymentEvents.intentId, intentId))
+    .orderBy(asc(paymentEvents.createdAt), asc(paymentEvents.id))
+    .limit(1);
+  return bankNameOf(row?.code);
 }
