@@ -91,19 +91,18 @@ function Waiting({ booking }: { readonly booking: BookingView }) {
   useDocumentTitle('Esperando tu banco');
   const countdown = useHoldCountdown(booking.holdExpiresAt);
   const isDesktop = useIsDesktop();
-  const pushFailed = booking.attempts.some((attempt) => attempt.mode === 'push' && attempt.status === 'failed');
   const elapsedMs = HOLD_MS - countdown.remainingMs;
   const qr = useQrAttempt(booking.token);
   // A QR attempt moves holdExpiresAt later, which shrinks "elapsed": once offered, the QR stays.
   const [qrUnlocked, setQrUnlocked] = useState(false);
-  const offerNow = isDesktop || pushFailed || elapsedMs >= QR_OFFER_AFTER_MS;
+  const offerNow = isDesktop || elapsedMs >= QR_OFFER_AFTER_MS;
   useEffect(() => {
     if (offerNow) setQrUnlocked(true);
   }, [offerNow]);
   const offerQr = qrUnlocked || offerNow;
   const time = formatTime(booking.slot.start);
   const barPercent = Math.min(FULL_PERCENT, (countdown.remainingMs / Math.max(HOLD_MS, countdown.remainingMs)) * FULL_PERCENT);
-  const qrFirst = offerQr && (isDesktop || pushFailed);
+  const qrFirst = offerQr && isDesktop;
 
   return (
     <Screen>
@@ -127,7 +126,6 @@ function Waiting({ booking }: { readonly booking: BookingView }) {
           </p>
         ) : null}
 
-        {pushFailed ? <ErrorNote>No pudimos enviar la solicitud a tu celular. Paga con el QR CoDi.</ErrorNote> : null}
         {qrFirst ? <QrOffer attempt={qr} /> : null}
 
         <ol className="mt-5 border-t border-ink">
@@ -230,7 +228,7 @@ function Released({ booking }: { readonly booking: BookingView }) {
         </h1>
         <p className="mt-2 text-muted">
           {shortDateLabel(booking.slot.start)} · {formatTime(booking.slot.start)}. Si ya autorizaste el pago, esta pantalla
-          cambia sola cuando tu banco confirme.
+          cambia sola cuando tu banco confirme; si el horario ya se ocupó, el negocio te devuelve el anticipo por SPEI.
         </p>
         <Button className="mt-5" onClick={() => navigate(ROUTES.book)}>
           Elegir otro horario
