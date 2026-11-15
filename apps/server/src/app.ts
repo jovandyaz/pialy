@@ -2,7 +2,7 @@ import cookie from '@fastify/cookie';
 import helmet from '@fastify/helmet';
 import { money, type Clock, type RailConnector } from '@pialy/payments';
 import { sql } from 'drizzle-orm';
-import Fastify, { type FastifyInstance } from 'fastify';
+import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 import type { Env } from './config/env.js';
 import { createOwnerAuth } from './http/auth.js';
 import { problemErrorHandler, problemNotFoundHandler } from './http/problem.js';
@@ -50,6 +50,28 @@ export const LOG_REDACT_PATHS = [
   '*.PEY_WEBHOOK_SECRET',
 ] as const;
 
+/** A booking token is a bearer secret for its pass: these paths carry one right after the prefix. */
+const TOKEN_IN_PATH = /^(\/(?:api\/bookings|api\/verify|c|negocio\/verificar)\/)([^/?#]+)/;
+const LOGGED_TOKEN_CHARS = 4;
+
+/** `url` with its booking token cut to a prefix that still tells requests apart in the logs. */
+export function urlForLog(url: string): string {
+  return url.replace(TOKEN_IN_PATH, (_match, prefix: string, token: string) => `${prefix}${token.slice(0, LOGGED_TOKEN_CHARS)}…`);
+}
+
+/** Fastify's default `req` serializer, minus the full booking token. Must never throw. */
+function serializeRequest(request: FastifyRequest) {
+  // Typed as always present, but Fastify's own serializer guards it.
+  const remotePort = (request.socket as FastifyRequest['socket'] | undefined)?.remotePort;
+  return {
+    method: request.method,
+    url: urlForLog(request.url),
+    host: request.host,
+    remoteAddress: request.ip,
+    ...(remotePort === undefined ? {} : { remotePort }),
+  };
+}
+
 export function buildApp(deps: AppDeps): FastifyInstance {
   const phoneHashSalt = deps.env.PHONE_HASH_SALT;
   if (phoneHashSalt === undefined) throw new Error('PHONE_HASH_SALT is required to hash customer phones');
@@ -64,6 +86,7 @@ export function buildApp(deps: AppDeps): FastifyInstance {
         : {
             level: 'info',
             redact: { paths: [...LOG_REDACT_PATHS], censor: '[redacted]' },
+            serializers: { req: serializeRequest },
             ...(deps.logStream ? { stream: deps.logStream } : {}),
           },
   });

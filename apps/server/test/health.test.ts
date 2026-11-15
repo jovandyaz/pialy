@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Writable } from 'node:stream';
-import { buildApp } from '../src/app.js';
+import { buildApp, urlForLog } from '../src/app.js';
 import { createDb } from '../src/infrastructure/db/client.js';
 import { openTestDb, testDeps } from './support.js';
 
@@ -115,5 +115,42 @@ describe('log redaction', () => {
       expect(out).not.toContain(leaked);
     }
     expect(out).toContain('[redacted]');
+  });
+});
+
+describe('request logs', () => {
+  const TOKEN = 'Zx9QbW1kT2tlbl9TZWNyZXQ';
+
+  it('cut booking tokens in the logged URL to their first 4 characters', async () => {
+    const chunks: string[] = [];
+    const logStream = new Writable({
+      write(chunk: Buffer, _enc, cb) {
+        chunks.push(chunk.toString());
+        cb();
+      },
+    });
+    const app = buildApp(testDeps(handle, { logStream }));
+    await app.inject({ method: 'GET', url: `/api/bookings/${TOKEN}` });
+    await app.inject({ method: 'GET', url: `/api/bookings/${TOKEN}/events` });
+    await app.close();
+
+    const out = chunks.join('');
+    expect(out).not.toContain(TOKEN);
+    expect(out).toContain('"url":"/api/bookings/Zx9Q…"');
+    expect(out).toContain('"url":"/api/bookings/Zx9Q…/events"');
+    expect(out).toContain('"method":"GET"');
+  });
+
+  it.each([
+    [`/api/bookings/${TOKEN}/check-in`, '/api/bookings/Zx9Q…/check-in'],
+    [`/api/bookings/${TOKEN}/qr`, '/api/bookings/Zx9Q…/qr'],
+    [`/api/verify/${TOKEN}`, '/api/verify/Zx9Q…'],
+    [`/c/${TOKEN}?x=1`, '/c/Zx9Q…?x=1'],
+    [`/negocio/verificar/${TOKEN}`, '/negocio/verificar/Zx9Q…'],
+    ['/api/bookings', '/api/bookings'],
+    ['/api/slots?date=2026-11-15', '/api/slots?date=2026-11-15'],
+    ['/estudio-demo', '/estudio-demo'],
+  ])('logs %s as %s', (url, logged) => {
+    expect(urlForLog(url)).toBe(logged);
   });
 });
