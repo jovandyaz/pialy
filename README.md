@@ -39,32 +39,28 @@ Payment policy:
 ## Architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
   customer["Customer phone"]
-  business["Business phone<br/>(agenda)"]
-  bank["Customer's bank app"]
+  business["Business phone (agenda)"]
 
-  subgraph app["Fastify (one service)"]
+  subgraph app["Fastify, one service"]
+    direction LR
     api["API /api/* + SPA"]
-    sse["SSE"]
-    outbox["Outbox"]
-    sweeper["Sweeper<br/>every 15 s"]
+    sweeper["Sweeper, every 15 s"]
+    outbox["Outbox"] --> sse["SSE"]
   end
 
   db[("Postgres")]
   pey["pey API"]
+  bank["Customer's bank app"]
 
-  customer -- HTTP --> api
-  business -- HTTP --> api
-  sse -- live updates --> customer
-  sse -- live updates --> business
-  api --> db
-  outbox --> sse
-  sweeper --> db
+  customer & business -- HTTP --> api
+  sse -. live updates .-> customer & business
+  api & sweeper --> db
   api -- "CoDi push / QR" --> pey
   sweeper -- status lookup --> pey
-  pey -- CoDi request --> bank
   pey -- signed webhook --> api
+  pey -- CoDi request --> bank
 ```
 
 - `packages/payments`: payment domain with no I/O (payment intent, attempts, money, state machine, ports).
