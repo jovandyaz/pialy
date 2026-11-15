@@ -10,6 +10,9 @@ export interface StreamHint {
   readonly status?: string;
 }
 
+/** The hint passed for a poll tick, here or by a caller's own slower poll. */
+export const POLL_TICK: StreamHint = { type: POLL_HINT_TYPE };
+
 /** True for the hint of a fallback poll tick: callers may skip it while a fetch is in flight. */
 export function isPollTick(hint: StreamHint | null | undefined): boolean {
   return hint?.type === POLL_HINT_TYPE;
@@ -30,7 +33,7 @@ export function useEventStream(url: string | null, onChange: (hint: StreamHint |
     if (url === null) return undefined;
     let poll: ReturnType<typeof setInterval> | undefined;
     const startPolling = (): void => {
-      poll ??= setInterval(() => callback.current({ type: POLL_HINT_TYPE }), POLL_INTERVAL_MS);
+      poll ??= setInterval(() => callback.current(POLL_TICK), POLL_INTERVAL_MS);
     };
     const stopPolling = (): void => {
       clearInterval(poll);

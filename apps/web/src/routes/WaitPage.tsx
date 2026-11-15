@@ -12,7 +12,7 @@ import { errorDetail, failed, loading, ready, REMOTE, type Remote } from '../lib
 import { navigate, ROUTES, useDocumentTitle } from '../lib/router';
 import { formatTime, shortDateLabel } from '../lib/time';
 import { useHoldCountdown } from '../lib/useHoldCountdown';
-import { isPollTick, useEventStream, type StreamHint } from '../useEventStream';
+import { isPollTick, POLL_TICK, useEventStream, type StreamHint } from '../useEventStream';
 import { isPaid } from '../ui/status';
 import { PassView } from './PassView';
 
@@ -20,6 +20,39 @@ const HOLD_MS = 360_000;
 const QR_OFFER_AFTER_MS = 40_000;
 const FULL_PERCENT = 100;
 const FINE_POINTER = '(pointer: fine)';
+const SLOW_POLL_MS = 30_000;
+
+/**
+ * How the page follows a booking. A hold changes within seconds, so it gets the live stream. A
+ * confirmed pass can still be checked in and an expired hold can still be paid late, so those poll
+ * slowly. Checked-in and canceled bookings never change. A stream per idle pass would fill the hub.
+ */
+export type BookingWatch = 'live' | 'slow' | 'none';
+
+export function bookingWatch(status: BookingView['status']): BookingWatch {
+  switch (status) {
+    case STATUS.holding:
+      return 'live';
+    case STATUS.confirmed:
+    case STATUS.expired:
+      return 'slow';
+    case STATUS.checkedIn:
+    case STATUS.canceled:
+      return 'none';
+  }
+}
+
+function useSlowPoll(enabled: boolean, onTick: (hint: StreamHint) => void): void {
+  const callback = useRef(onTick);
+  useEffect(() => {
+    callback.current = onTick;
+  });
+  useEffect(() => {
+    if (!enabled) return undefined;
+    const timer = setInterval(() => callback.current(POLL_TICK), SLOW_POLL_MS);
+    return () => clearInterval(timer);
+  }, [enabled]);
+}
 
 function subscribePointer(listener: () => void): () => void {
   const query = window.matchMedia(FINE_POINTER);
@@ -59,7 +92,9 @@ export function WaitPage({ token }: { readonly token: string }) {
   }, [token]);
 
   useEffect(() => refetch(), [refetch]);
-  useEventStream(API_PATH.bookingEvents(token), refetch);
+  const watch = booking.kind === REMOTE.ready ? bookingWatch(booking.data.status) : 'none';
+  useEventStream(watch === 'live' ? API_PATH.bookingEvents(token) : null, refetch);
+  useSlowPoll(watch === 'slow', refetch);
   useDocumentTitle(waitTitle(booking));
 
   if (booking.kind === REMOTE.loading) {
