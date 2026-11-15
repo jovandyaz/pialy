@@ -1,6 +1,6 @@
-import { act, cleanup, render, screen } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { api, type Board, type RecentlyPaid } from '../api';
+import { api, type Board, type BoardSlot, type Flag, type RecentlyPaid } from '../api';
 import { POLL_INTERVAL_MS } from '../useEventStream';
 import { BoardPage, newlyPaid } from './BoardPage';
 
@@ -57,5 +57,56 @@ describe('BoardPage payment notice', () => {
 
     expect(await screen.findByText('Anticipo recibido de Luis · cita del mar 17')).toBeDefined();
     expect(screen.queryByText(/de Ana/)).toBeNull();
+  });
+});
+
+describe('BoardPage layout', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    vi.setSystemTime(new Date('2026-11-14T18:05:00.000Z'));
+  });
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  const paidSlot: BoardSlot = {
+    start: '2026-11-14T16:00:00.000Z',
+    end: '2026-11-14T16:45:00.000Z',
+    booking: {
+      token: 'luis',
+      status: 'confirmed',
+      late: false,
+      slotStart: '2026-11-14T16:00:00.000Z',
+      customerName: 'Luis',
+      phoneLast4: '4410',
+      bankName: 'Santander',
+      checkedInAt: null,
+    },
+  };
+  const lateFlag: Flag = {
+    id: 'flag-1',
+    kind: 'refund_due',
+    createdAt: '2026-11-14T17:03:00.000Z',
+    reason: null,
+    paidAt: '2026-11-14T17:02:00.000Z',
+    trackingKey: null,
+    amount: null,
+    expected: null,
+    received: null,
+    booking: { token: 'ana', customerName: 'Ana', phoneLast4: '1234', slotStart: '2026-11-14T17:00:00.000Z' },
+  };
+
+  it('keeps open flags in their own region and the payer details in the agenda row', async () => {
+    vi.spyOn(api, 'board').mockResolvedValue({ date: TODAY, slots: [paidSlot], flags: [lateFlag], recent: [] });
+
+    render(<BoardPage />);
+    const agenda = await screen.findByRole('list', { name: 'Agenda' });
+
+    const flags = screen.getByRole('region', { name: 'Por revisar' });
+    expect(within(flags).getByRole('button', { name: 'Registrar devolución SPEI' })).toBeDefined();
+    expect(within(agenda).getByText('Cel. ··4410 · Santander')).toBeDefined();
+    expect(within(agenda).getByText('Anticipo pagado')).toBeDefined();
   });
 });
