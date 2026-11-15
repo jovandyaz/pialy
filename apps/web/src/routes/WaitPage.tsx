@@ -188,7 +188,7 @@ function Waiting({ booking }: { readonly booking: BookingView }) {
           <Step
             n={3}
             title={`Autoriza ${BUSINESS.deposit} a ${BUSINESS.name}`}
-            detail={`Antes de las ${formatTime(booking.holdExpiresAt)}. Esta pantalla cambia sola cuando tu banco confirme.`}
+            detail={`${booking.holdExpiresAt === null ? '' : `Antes de las ${formatTime(booking.holdExpiresAt)}. `}Esta pantalla cambia sola cuando tu banco confirme.`}
           />
         </ol>
 
