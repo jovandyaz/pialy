@@ -93,6 +93,19 @@ describe('PassScanner', () => {
     expect(track.stop).not.toHaveBeenCalled();
   });
 
+  it('rejects a scanned bare token, which only the typed field accepts', async () => {
+    const { stream, track } = fakeStream();
+    withCamera(() => Promise.resolve(stream));
+    const { onPass } = renderScanner();
+    await waitFor(() => expect(decoder.onFrame).not.toBeNull());
+
+    scan(TOKEN);
+
+    expect(screen.getByText(NOT_A_PASS)).toBeDefined();
+    expect(onPass).not.toHaveBeenCalled();
+    expect(track.stop).not.toHaveBeenCalled();
+  });
+
   it('stops the camera and hands over the token of a scanned pass', async () => {
     const { stream, track } = fakeStream();
     withCamera(() => Promise.resolve(stream));

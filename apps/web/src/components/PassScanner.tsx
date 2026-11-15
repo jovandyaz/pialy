@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useRef, useState, type FormEvent } from 'react';
-import { passTokenFrom } from '../lib/pass-code';
+import { scannedPassToken, typedPassToken } from '../lib/pass-code';
 import { cameraErrorOf, openRearCamera, scanQrCodes, stopCamera, type CameraError, type QrScan } from '../lib/qr-scan';
 import { ErrorNote } from './Screen';
 import { Button } from './ui/Button';
@@ -45,7 +45,7 @@ export function PassScanner({ onPass, onClose }: PassScannerProps) {
   }
 
   const onScanned = useEffectEvent((text: string) => {
-    const token = passTokenFrom(text, window.location.origin);
+    const token = scannedPassToken(text, window.location.origin);
     if (token === null) setNotice(NOT_A_PASS);
     else accept(token);
   });
@@ -83,7 +83,7 @@ export function PassScanner({ onPass, onClose }: PassScannerProps) {
 
   function submitCode(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const token = passTokenFrom(code, window.location.origin);
+    const token = typedPassToken(code, window.location.origin);
     if (token === null) setCodeError(NOT_A_PASS);
     else accept(token);
   }
