@@ -1,7 +1,8 @@
 import { useEffect, useSyncExternalStore } from 'react';
 
 export const ROUTES = {
-  book: '/',
+  landing: '/',
+  book: '/estudio-demo',
   booking: (token: string) => `/c/${encodeURIComponent(token)}`,
   board: '/negocio',
   login: '/negocio/entrar',
@@ -11,6 +12,7 @@ export const ROUTES = {
 export const NEXT_PARAM = 'siguiente';
 
 export type Route =
+  | { readonly name: 'landing' }
   | { readonly name: 'book' }
   | { readonly name: 'booking'; readonly token: string }
   | { readonly name: 'board' }
@@ -30,6 +32,7 @@ export function safeNext(value: string | null): string {
 
 export function matchRoute(pathname: string, search: string): Route {
   const path = pathname === '/' ? '/' : pathname.replace(TRAILING_SLASH, '');
+  if (path === ROUTES.landing) return { name: 'landing' };
   if (path === ROUTES.book) return { name: 'book' };
   if (path === ROUTES.board) return { name: 'board' };
   if (path === ROUTES.login) return { name: 'login', next: safeNext(new URLSearchParams(search).get(NEXT_PARAM)) };

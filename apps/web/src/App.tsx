@@ -4,6 +4,7 @@ import { BUSINESS } from './lib/business';
 import { navigate, ROUTES, useRoute } from './lib/router';
 import { BoardPage } from './routes/BoardPage';
 import { BookPage } from './routes/BookPage';
+import { LandingPage } from './routes/LandingPage';
 import { LoginPage } from './routes/LoginPage';
 import { VerifyPage } from './routes/VerifyPage';
 import { WaitPage } from './routes/WaitPage';
@@ -11,6 +12,8 @@ import { WaitPage } from './routes/WaitPage';
 export function App() {
   const route = useRoute();
   switch (route.name) {
+    case 'landing':
+      return <LandingPage />;
     case 'book':
       return <BookPage />;
     case 'booking':
