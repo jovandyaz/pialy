@@ -38,16 +38,29 @@ Payment policy:
 
 ## Architecture
 
-```
-Customer phone ─┐                         ┌─ pey API (CoDi push, QR, status)
-Business phone ─┤ HTTP + SSE              │
-                ▼                         │
-       Fastify (API /api/*, SSE, SPA) ────┤
-         ├─ sweeper every 15 s            │
-         └─ outbox → SSE                  │
-                │                         │
-                ▼                         │
-            Postgres          pey ── signed webhook ──▶ Fastify
+```mermaid
+flowchart TB
+  customer["Customer phone"]
+  business["Business phone (agenda)"]
+
+  subgraph app["Fastify, one service"]
+    direction LR
+    api["API /api/* + SPA"]
+    sweeper["Sweeper, every 15 s"]
+    outbox["Outbox"] --> sse["SSE"]
+  end
+
+  db[("Postgres")]
+  pey["pey API"]
+  bank["Customer's bank app"]
+
+  customer & business -- HTTP --> api
+  sse -. live updates .-> customer & business
+  api & sweeper --> db
+  api -- "CoDi push / QR" --> pey
+  sweeper -- status lookup --> pey
+  pey -- signed webhook --> api
+  pey -- CoDi request --> bank
 ```
 
 - `packages/payments`: payment domain with no I/O (payment intent, attempts, money, state machine, ports).
