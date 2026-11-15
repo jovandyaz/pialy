@@ -27,8 +27,8 @@ const PERCENT = 100;
 const EXAMPLE_QR_VALUE = 'Pialy · pase de ejemplo';
 
 const EXAMPLE = {
-  day: 'Sáb 15 nov',
-  boardDay: 'sáb 15',
+  day: 'Dom 15 nov',
+  boardDay: 'dom 15',
   time: '11:15',
   customer: 'Jorge P.',
   bank: 'BBVA',
