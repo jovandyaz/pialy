@@ -43,7 +43,7 @@ describe('VerifyPage pass date', () => {
   it('does not offer check-in for a pass of another day', async () => {
     vi.spyOn(api, 'verify').mockResolvedValue(pass({ slotStart: TOMORROW_SLOT }));
     render(<VerifyPage token="tok_verify_pass_000001" />);
-    expect(await screen.findByText(/Este pase es para el Sábado 21 de noviembre/)).toBeDefined();
+    expect(await screen.findByText(/Este pase es para el sábado 21 de noviembre/)).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Marcar que llegó' })).toBeNull();
   });
 

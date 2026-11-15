@@ -112,7 +112,7 @@ function Verdict({ view, onChange }: { readonly view: VerifyView; readonly onCha
       <KeyValues rows={rows} className="mx-5 mt-3.5" />
       {usedAt === null && !forToday ? (
         <Panel tone="late" as="div" role="status" className="mx-5 mt-4 p-3.5">
-          <b>Este pase es para el {longDateLabel(view.slotStart)}.</b>
+          <b>Este pase es para el {longDateLabel(view.slotStart).toLowerCase()}.</b>
           <p className="mt-1 text-sm">Solo se puede marcar la llegada ese día.</p>
         </Panel>
       ) : usedAt === null ? (
