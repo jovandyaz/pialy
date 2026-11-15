@@ -12,6 +12,7 @@ const CAMERA_ERROR_TEXT: Record<CameraError, string> = {
   missing: 'No encontramos una cámara en este dispositivo.',
   insecure: 'La cámara solo funciona en una conexión segura (https).',
   failed: 'No pudimos abrir la cámara. Cierra otras apps que la estén usando y vuelve a intentarlo.',
+  reader: 'No pudimos cargar el lector. Revisa tu conexión o escribe el código.',
 };
 
 const CAMERA = { starting: 'starting', live: 'live', error: 'error' } as const;
@@ -34,12 +35,15 @@ interface PassScannerProps {
 export function PassScanner({ onPass, onClose }: PassScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const stopRef = useRef<() => void>(() => undefined);
+  const acceptedRef = useRef(false);
   const [camera, setCamera] = useState<Camera>(STARTING);
   const [notice, setNotice] = useState<string | null>(null);
   const [code, setCode] = useState('');
   const [codeError, setCodeError] = useState<string | null>(null);
 
   function accept(token: string) {
+    if (acceptedRef.current) return;
+    acceptedRef.current = true;
     stopRef.current();
     onPass(token);
   }
@@ -73,7 +77,10 @@ export function PassScanner({ onPass, onClose }: PassScannerProps) {
 
     async function start(target: HTMLVideoElement) {
       stream = await openRearCamera();
-      if (active) scan = await scanQrCodes(stream, target, (text) => onScanned(text), fail);
+      const onCode = (text: string) => {
+        if (active) onScanned(text);
+      };
+      if (active) scan = await scanQrCodes(stream, target, onCode, fail);
       if (active) setCamera(LIVE);
       else release();
     }

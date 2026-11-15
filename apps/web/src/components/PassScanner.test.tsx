@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { NotFoundException } from '@zxing/library';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NOT_A_PASS, PassScanner } from './PassScanner';
 
@@ -7,19 +8,22 @@ type ScanCallback = (result: { getText: () => string } | undefined, error: unkno
 const decoder = vi.hoisted(() => ({
   onFrame: null as ScanCallback | null,
   stop: () => undefined as void,
+  started: Promise.resolve(),
 }));
 
 vi.mock('@zxing/browser', () => ({
   BrowserQRCodeReader: class {
-    decodeFromStream(_stream: MediaStream, _video: HTMLVideoElement, callback: ScanCallback) {
+    async decodeFromStream(_stream: MediaStream, _video: HTMLVideoElement, callback: ScanCallback) {
+      await decoder.started;
       decoder.onFrame = callback;
-      return Promise.resolve({ stop: decoder.stop });
+      return { stop: decoder.stop };
     }
   },
 }));
 
 const TOKEN = 'Xk3_9fQe-2LmNpRsTuVwYz';
 const DENIED = 'Permite el acceso a la cámara para escanear.';
+const CAMERA_FAILED = 'No pudimos abrir la cámara. Cierra otras apps que la estén usando y vuelve a intentarlo.';
 const FALLBACK_LABEL = '¿No lee el código? Escribe el código del pase';
 
 function fakeStream() {
@@ -42,10 +46,23 @@ function scan(text: string) {
   act(() => decoder.onFrame?.({ getText: () => text }, undefined));
 }
 
+function frameError(error: unknown) {
+  act(() => decoder.onFrame?.(undefined, error));
+}
+
+async function renderScanning() {
+  const { stream, track } = fakeStream();
+  withCamera(() => Promise.resolve(stream));
+  const view = renderScanner();
+  await waitFor(() => expect(decoder.onFrame).not.toBeNull());
+  return { track, ...view };
+}
+
 describe('PassScanner', () => {
   beforeEach(() => {
     decoder.onFrame = null;
     decoder.stop = vi.fn();
+    decoder.started = Promise.resolve();
   });
   afterEach(() => {
     cleanup();
@@ -127,6 +144,52 @@ describe('PassScanner', () => {
 
     unmount();
 
+    expect(track.stop).toHaveBeenCalled();
+    expect(decoder.stop).toHaveBeenCalled();
+  });
+
+  it('keeps scanning through frames without a readable code', async () => {
+    const { track } = await renderScanning();
+
+    frameError(new NotFoundException());
+
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(track.stop).not.toHaveBeenCalled();
+    expect(decoder.stop).not.toHaveBeenCalled();
+  });
+
+  it('stops the camera and says so when the scan loop fails', async () => {
+    const { track } = await renderScanning();
+
+    frameError(new Error('canvas lost'));
+
+    expect(screen.getByText(CAMERA_FAILED)).toBeDefined();
+    expect(track.stop).toHaveBeenCalled();
+  });
+
+  it('opens a pass only once, however many times it is read or typed', async () => {
+    const { onPass } = await renderScanning();
+
+    scan(`${window.location.origin}/negocio/verificar/${TOKEN}`);
+    scan(`${window.location.origin}/negocio/verificar/${TOKEN}`);
+    fireEvent.change(screen.getByLabelText(FALLBACK_LABEL), { target: { value: TOKEN } });
+    fireEvent.click(screen.getByRole('button', { name: 'Verificar pase' }));
+
+    expect(onPass).toHaveBeenCalledTimes(1);
+  });
+
+  it('releases a decoder that starts after the sheet already closed', async () => {
+    let start: () => void = () => undefined;
+    decoder.started = new Promise<void>((resolve) => (start = resolve));
+    const { stream, track } = fakeStream();
+    withCamera(() => Promise.resolve(stream));
+    const { unmount } = renderScanner();
+    await waitFor(() => expect(navigator.mediaDevices.getUserMedia).toHaveBeenCalled());
+
+    unmount();
+    await act(async () => start());
+
+    expect(decoder.stop).toHaveBeenCalled();
     expect(track.stop).toHaveBeenCalled();
   });
 
