@@ -63,12 +63,24 @@ describe('web app serving', () => {
   });
 
   it('keeps problem+json 404 for unknown API paths and missing files', async () => {
-    for (const url of ['/api/nope', '/assets/missing.js']) {
+    for (const url of ['/api/nope', '/api', '/api?x=1', '/api/', '/assets/missing.js']) {
       const res = await app.inject({ method: 'GET', url });
       expect(res.statusCode).toBe(404);
       expect(res.headers['content-type']).toContain('application/problem+json');
       expect(res.json()).toEqual({ type: 'about:blank', title: 'Not Found', status: 404 });
     }
+  });
+
+  it('answers HEAD on client routes like GET, without a body', async () => {
+    const res = await app.inject({ method: 'HEAD', url: '/negocio' });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/html');
+    expect(res.body).toBe('');
+  });
+
+  it('keeps problem+json 404 for HEAD on API paths', async () => {
+    const res = await app.inject({ method: 'HEAD', url: '/api/nope' });
+    expect(res.statusCode).toBe(404);
   });
 
   it('keeps problem+json 404 for unknown non-GET requests', async () => {

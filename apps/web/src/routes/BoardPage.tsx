@@ -45,13 +45,15 @@ function snapshot(board: Board): StatusSnapshot {
 
 export function BoardPage() {
   useDocumentTitle('Tablero');
-  const [date] = useState(() => isoDateOf(new Date()));
+  const [date, setDate] = useState(() => isoDateOf(new Date()));
+  const latestRequest = useRef(0);
   const [board, setBoard] = useState<Remote<Board>>(loading);
   const [soundOn, setSoundOn] = useState(false);
   const [flashing, setFlashing] = useState<ReadonlySet<string>>(new Set());
   const [toast, setToast] = useState<Toast | null>(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [resolving, setResolving] = useState<Flag | null>(null);
+  const [resolveOpen, setResolveOpen] = useState(false);
   const seen = useRef<StatusSnapshot | null>(null);
   const soundRef = useRef(soundOn);
   useEffect(() => {
@@ -69,18 +71,25 @@ export function BoardPage() {
   }, []);
 
   const refetch = useCallback(() => {
+    latestRequest.current += 1;
+    const request = latestRequest.current;
+    const isStale = (): boolean => request !== latestRequest.current;
+    // Computed per fetch so the board rolls over at midnight in the business time zone.
+    const today = isoDateOf(new Date());
     api
-      .board(date)
+      .board(today)
       .then((data) => {
+        if (isStale()) return;
+        setDate(today);
         announce(newlyPaid(seen.current, data));
         seen.current = snapshot(data);
         setBoard(ready(data));
       })
       .catch((error: unknown) => {
-        if (redirectIfLoggedOut(error)) return;
+        if (isStale() || redirectIfLoggedOut(error)) return;
         setBoard((current) => (current.kind === REMOTE.ready ? current : failed(error)));
       });
-  }, [date, announce]);
+  }, [announce]);
 
   useEffect(refetch, [refetch]);
   useEventStream(board.kind === REMOTE.ready ? API_PATH.boardEvents : null, refetch);
@@ -149,7 +158,10 @@ export function BoardPage() {
       {data === null ? null : (
         <>
           {data.flags.map((flag) => (
-            <FlagAlert key={flag.id} flag={flag} onResolve={() => setResolving(flag)} />
+            <FlagAlert key={flag.id} flag={flag} onResolve={() => {
+                setResolving(flag);
+                setResolveOpen(true);
+              }} />
           ))}
           <ol aria-label="Agenda" className="mx-5 mt-3.5 mb-6 border-t border-ink">
             {data.slots.map((slot) => (
@@ -184,12 +196,14 @@ export function BoardPage() {
 
       {resolving === null ? null : (
         <ResolveSheet
+          key={resolving.id}
           flag={resolving}
+          open={resolveOpen}
           onDone={() => {
-            setResolving(null);
+            setResolveOpen(false);
             refetch();
           }}
-          onCancel={() => setResolving(null)}
+          onCancel={() => setResolveOpen(false)}
         />
       )}
     </Screen>
@@ -223,7 +237,7 @@ function rowDetail(booking: OwnerBooking | null): string {
 
 function flagDetail(flag: Flag): string {
   const who = flag.booking?.customerName ?? 'Alguien';
-  const paidAt = flag.paidAt === null ? '' : ` a las ${formatTime(flag.paidAt)}`;
+  const paidAt = flag.paidAt === null || Number.isNaN(Date.parse(flag.paidAt)) ? '' : ` a las ${formatTime(flag.paidAt)}`;
   const slotTime = flag.booking === null ? null : formatTime(flag.booking.slotStart);
   const tracking = flag.trackingKey === null ? '' : ` Clave de rastreo ${flag.trackingKey}.`;
   if (isDuplicatePayment(flag)) return `${who} pagó otra vez${paidAt} su cita de las ${slotTime ?? '—'}.${tracking}`;
@@ -250,7 +264,14 @@ function FlagAlert({ flag, onResolve }: { readonly flag: Flag; readonly onResolv
   );
 }
 
-function ResolveSheet({ flag, onDone, onCancel }: { readonly flag: Flag; readonly onDone: () => void; readonly onCancel: () => void }) {
+interface ResolveSheetProps {
+  readonly flag: Flag;
+  readonly open: boolean;
+  readonly onDone: () => void;
+  readonly onCancel: () => void;
+}
+
+function ResolveSheet({ flag, open, onDone, onCancel }: ResolveSheetProps) {
   const [note, setNote] = useState('');
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -273,7 +294,7 @@ function ResolveSheet({ flag, onDone, onCancel }: { readonly flag: Flag; readonl
   }
 
   return (
-    <Sheet open onClose={onCancel} label={title}>
+    <Sheet open={open} onClose={onCancel} label={title}>
       <form onSubmit={submit}>
         <h2 className="text-2xl font-extrabold">{title}</h2>
         <p className="mt-1.5 text-sm text-muted">

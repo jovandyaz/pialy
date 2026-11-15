@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { api, API_PATH, HTTP_NOT_FOUND, STATUS, type BookingView, type QrResponse } from '../api';
 import { QrCode } from '../components/QrCode';
 import { ErrorNote, Loading, Screen, TopBar } from '../components/Screen';
@@ -7,7 +7,7 @@ import { Button } from '../components/ui/Button';
 import { Numeral } from '../components/ui/Numeral';
 import { StatusPill } from '../components/ui/StatusTag';
 import { BUSINESS } from '../lib/business';
-import { useIdempotencyKey } from '../lib/idempotency';
+import { shouldKeepKey, useIdempotencyKey } from '../lib/idempotency';
 import { errorDetail, failed, loading, ready, REMOTE, type Remote } from '../lib/remote';
 import { navigate, ROUTES, useDocumentTitle } from '../lib/router';
 import { formatTime, shortDateLabel } from '../lib/time';
@@ -34,11 +34,20 @@ function useIsDesktop(): boolean {
 export function WaitPage({ token }: { readonly token: string }) {
   const [booking, setBooking] = useState<Remote<BookingView>>(loading);
 
+  const latestRequest = useRef(0);
+
   const refetch = useCallback(() => {
+    latestRequest.current += 1;
+    const request = latestRequest.current;
+    const isStale = (): boolean => request !== latestRequest.current;
     api
       .booking(token)
-      .then((data) => setBooking(ready(data)))
-      .catch((error: unknown) => setBooking((current) => (current.kind === REMOTE.ready ? current : failed(error))));
+      .then((data) => {
+        if (!isStale()) setBooking(ready(data));
+      })
+      .catch((error: unknown) => {
+        if (!isStale()) setBooking((current) => (current.kind === REMOTE.ready ? current : failed(error)));
+      });
   }, [token]);
 
   useEffect(refetch, [refetch]);
@@ -167,7 +176,10 @@ function useQrAttempt(token: string): QrAttempt {
     api
       .startQr(token, idempotency.keyFor(token))
       .then(setQr)
-      .catch((failure: unknown) => setError(errorDetail(failure)))
+      .catch((failure: unknown) => {
+        if (!shouldKeepKey(failure)) idempotency.reset();
+        setError(errorDetail(failure));
+      })
       .finally(() => setPending(false));
   }, [token, idempotency]);
 

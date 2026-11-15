@@ -28,6 +28,11 @@ describe('formatPhoneInput', () => {
     expect(formatPhoneInput('+525512345678')).toBe('55 1234 5678');
   });
 
+  it('drops the old mobile prefix after +52', () => {
+    expect(formatPhoneInput('+52 1 55 1234 5678')).toBe('55 1234 5678');
+    expect(phoneDigits('+52 1 55 1234 5678')).toBe('5512345678');
+  });
+
   it('is stable when reformatting its own output', () => {
     expect(formatPhoneInput(formatPhoneInput('5512345678'))).toBe('55 1234 5678');
   });

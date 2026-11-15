@@ -1,4 +1,19 @@
 import { useCallback, useMemo, useRef } from 'react';
+import { ApiError, HTTP_CONFLICT } from '../api';
+
+const NETWORK_FAILURE_STATUS = 0;
+const REQUEST_IN_PROGRESS_TYPE = 'urn:pialy:problem:request-in-progress';
+
+/**
+ * Keep the Idempotency-Key only when the outcome is unknown (network failure, or the server is
+ * still processing the same key). Any other error is final and the server stored it on the key, so
+ * a retry must use a new one.
+ */
+export function shouldKeepKey(error: unknown): boolean {
+  if (!(error instanceof ApiError)) return true;
+  if (error.status === NETWORK_FAILURE_STATUS) return true;
+  return error.status === HTTP_CONFLICT && error.problem?.['type'] === REQUEST_IN_PROGRESS_TYPE;
+}
 
 export interface IdempotencyKeys {
   readonly keyFor: (payload: string) => string;

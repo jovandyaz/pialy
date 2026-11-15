@@ -35,9 +35,11 @@ function looksLikeFile(url: string): boolean {
   return basename(path).includes('.');
 }
 
+const API_PATH = /^\/api(?:[/?]|$)/;
+
 /**
  * Serves the built SPA at `/` with an `index.html` fallback for client-side routes.
- * Unknown `/api/*`, unknown files and non-GET requests keep the problem+json 404.
+ * Unknown `/api` paths, unknown files and non GET/HEAD requests keep the problem+json 404.
  * Returns false (after one info log) when the directory is missing, e.g. in server tests.
  */
 export function registerWeb(app: FastifyInstance, webRoot: string): boolean {
@@ -57,7 +59,7 @@ export function registerWeb(app: FastifyInstance, webRoot: string): boolean {
   });
 
   app.setNotFoundHandler((request: FastifyRequest, reply: FastifyReply) => {
-    if (request.method !== 'GET' || request.url.startsWith('/api/') || looksLikeFile(request.url)) {
+    if ((request.method !== 'GET' && request.method !== 'HEAD') || API_PATH.test(request.url) || looksLikeFile(request.url)) {
       return problemNotFoundHandler(request, reply);
     }
     return reply.status(200).sendFile(INDEX_FILE);

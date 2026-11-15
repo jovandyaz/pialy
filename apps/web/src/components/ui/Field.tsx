@@ -60,9 +60,7 @@ interface PhoneInputProps {
 export function PhoneInput({ id, value, onChange, describedBy, invalid = false }: PhoneInputProps) {
   return (
     <div className={inputFrame}>
-      <span className="border-r-2 border-ink bg-brand-wash p-3 font-bold" aria-hidden="true">
-        +52
-      </span>
+      <span className="border-r-2 border-ink bg-brand-wash p-3 font-bold">+52</span>
       <input
         id={id}
         className={inputBase}

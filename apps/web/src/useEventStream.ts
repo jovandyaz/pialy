@@ -10,7 +10,8 @@ export interface StreamHint {
 
 /**
  * Calls `onChange` on every server-sent event, and every 2 s while the stream is down (refused,
- * dropped or reconnecting); `hint` is `null` for a poll tick or reconnect. Callers refetch.
+ * dropped or reconnecting); `hint` is `null` for a poll tick or any (re)connect, which closes the
+ * race between the first fetch and the first subscription. Callers refetch.
  */
 export function useEventStream(url: string | null, onChange: (hint: StreamHint | null) => void): void {
   const callback = useRef(onChange);
@@ -36,9 +37,8 @@ export function useEventStream(url: string | null, onChange: (hint: StreamHint |
 
     const source = new EventSource(url, { withCredentials: true });
     source.onopen = () => {
-      const wasPolling = poll !== undefined;
       stopPolling();
-      if (wasPolling) callback.current(null);
+      callback.current(null);
     };
     source.onmessage = (message: MessageEvent<string>) => {
       const parsed = streamEventSchema.safeParse(safeJson(message.data));

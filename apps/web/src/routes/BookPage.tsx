@@ -9,7 +9,7 @@ import { Label } from '../components/ui/Panel';
 import { Sheet } from '../components/ui/Sheet';
 import { BUSINESS } from '../lib/business';
 import { cn } from '../lib/cn';
-import { useIdempotencyKey } from '../lib/idempotency';
+import { shouldKeepKey, useIdempotencyKey } from '../lib/idempotency';
 import { isCompletePhone, phoneDigits } from '../lib/phone';
 import { errorDetail, failed, loading, ready, REMOTE, type Remote } from '../lib/remote';
 import { navigate, ROUTES, useDocumentTitle } from '../lib/router';
@@ -200,6 +200,7 @@ function HoldSheet({ slot, onSlotTaken }: { readonly slot: SlotItem; readonly on
       navigate(ROUTES.booking(hold.token));
     } catch (failure) {
       setPending(false);
+      if (!shouldKeepKey(failure)) idempotency.reset();
       setError(errorDetail(failure));
       if (failure instanceof ApiError && failure.status === HTTP_CONFLICT && failure.problem?.['type'] === SLOT_TAKEN_TYPE) {
         onSlotTaken();

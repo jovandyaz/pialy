@@ -24,7 +24,8 @@ const TRAILING_SLASH = /\/+$/;
 
 /** Only same-app paths are followed after login, never another origin. */
 export function safeNext(value: string | null): string {
-  return value !== null && value.startsWith('/') && !value.startsWith('//') ? value : ROUTES.board;
+  if (value === null || !value.startsWith('/') || value.startsWith('//') || value.includes('\\')) return ROUTES.board;
+  return value;
 }
 
 export function matchRoute(pathname: string, search: string): Route {

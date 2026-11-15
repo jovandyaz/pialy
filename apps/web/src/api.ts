@@ -75,7 +75,7 @@ const flagSchema = z.object({
   kind: z.enum(FLAG_KINDS),
   createdAt: isoInstant,
   reason: z.string().nullable(),
-  paidAt: isoInstant.nullable(),
+  paidAt: z.string().nullable(),
   trackingKey: z.string().nullable(),
   amount: money.nullable(),
   expected: money.nullable(),
