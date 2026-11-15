@@ -15,6 +15,14 @@ Live: https://pialy-production.up.railway.app
 3. As soon as the bank confirms, the page turns into a pass with a QR, the bank and the tracking key.
 4. The business side lives at `/negocio` (PIN shared privately): the booking turns green, a toast appears and the agenda says "Anticipo recibido" out loud. "Escanear pase" opens the camera inside the agenda to verify the pass and mark the arrival; a pass can only be used once.
 
+## Tested in production
+
+Real $0.01 MXN charges through the live app, confirmed by the bank.
+
+| Bank | Push | QR | Notes |
+|---|---|---|---|
+| BBVA | Paid | Paid | The push arrives, but after login the app may not open the request directly; it shows up in the CoDi operations history. |
+
 ## How it uses CoDi (via pey)
 
 Only the server talks to pey (`packages/connector-pey`):
