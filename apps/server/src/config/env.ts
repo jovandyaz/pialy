@@ -9,7 +9,6 @@ const productionSecrets = [
   'BUSINESS_PIN',
   'COOKIE_SECRET',
   'PHONE_HASH_SALT',
-  'PUBLIC_BASE_URL',
 ] as const;
 
 const optionalString = z
@@ -28,7 +27,6 @@ const envSchema = z
     BUSINESS_PIN: optionalString.pipe(z.string().regex(/^\d{6,}$/, 'must be at least 6 digits').optional()),
     COOKIE_SECRET: optionalString.pipe(z.string().min(32, 'must be at least 32 characters').optional()),
     PHONE_HASH_SALT: optionalString,
-    PUBLIC_BASE_URL: optionalString,
     /** Built SPA directory; defaults to `apps/web/dist` next to this package. */
     WEB_ROOT: optionalString,
     DEMO_DEPOSIT_CENTS: z.coerce

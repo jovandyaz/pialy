@@ -11,7 +11,6 @@ const prodEnv = {
   BUSINESS_PIN: '123456',
   COOKIE_SECRET: 'c'.repeat(32),
   PHONE_HASH_SALT: 's'.repeat(16),
-  PUBLIC_BASE_URL: 'https://pialy.example',
 };
 
 describe('parseEnv', () => {
