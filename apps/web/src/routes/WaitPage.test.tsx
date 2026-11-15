@@ -111,3 +111,28 @@ describe('WaitPage live updates', () => {
     expect(opened).toHaveLength(0);
   });
 });
+
+describe('WaitPage bank guidance', () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('says where to look in any bank and until when to authorize', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener: () => undefined, removeEventListener: () => undefined }));
+    vi.spyOn(api, 'booking').mockResolvedValue({
+      ...EXPIRED,
+      status: 'holding',
+      holdExpiresAt: '2099-11-15T18:06:00.000Z',
+      attempts: [{ mode: 'push', status: 'awaiting' }],
+    });
+
+    render(<WaitPage token={EXPIRED.token} />);
+
+    expect(await screen.findByText('Busca la solicitud de cobro')).toBeDefined();
+    expect(screen.getByText(/la sección CoDi, tus notificaciones o el historial de operaciones con QR o CoDi/)).toBeDefined();
+    expect(screen.getByText(/^Antes de las 12:06\./)).toBeDefined();
+    expect(screen.queryByText(/BBVA/)).toBeNull();
+  });
+});
