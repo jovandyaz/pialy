@@ -185,9 +185,9 @@ docker-compose.yml             postgres:16 + fake pey for local
   - Fake pey: stdlib `ThreadingHTTPServer` implementing `POST /codi/pn`, `POST /codi/qr`, `GET /transaction/*` as `packages/connector-pey` calls them (copy request and response shapes from `packages/connector-pey/src` and its test fixtures), plus control endpoints `POST /_control/pay {provider_ref, amount, late?}` (records a payment and POSTs a Standard-Webhooks-signed event to the target's webhook URL using `agent_toolkit.webhooks.testing.sign` semantics), `POST /_control/fail-next {status}`, `GET /_control/requests`. Run with `python -m fake_pey --port 4010 --secret-file …`.
   - `Target` protocol in `targets.py`: `prefix(path) -> str`, `webhook_path() -> str`, `login(client) -> None`, `reset_db() -> None`, `name: Literal["ts","py"]`. `TsTarget`: unscoped `/api/...`, `/api/webhooks/pey`, `POST /api/session {pin}`. `PyTarget`: `/api/b/{slug}/...`, `/api/webhooks/pey/{connection_id}`, `POST /api/auth/login {email,password}`. Selected by `CONTRACT_TARGET`; `BASE_URL`, `CONTRACT_DB_URL`, seeded credentials from env.
   - Marker `ts_only` / `py_only` for login-specific cases.
-- [ ] **Step 1:** Write the cases listed in spec §11 (contract suite) as tests: each `bookings-routes`, `qr-attempt`, `webhook`, `board` and `sse` test of `apps/server/test` that needs no clock control becomes one contract test with the same name in snake case. Time-dependent ones are not here (Task 15 maps them).
-- [ ] **Step 2:** Run against the TS server: `PEY_BASE_URL=http://localhost:4010 pnpm --filter server dev` and `CONTRACT_TARGET=ts uv run pytest` → all pass. A failure is a bug in the suite, not in the TS server; the TS server is not modified.
-- [ ] **Step 3:** Commit `test(contract): add black-box contract suite and fake pey`.
+- [x] **Step 1:** Write the cases listed in spec §11 (contract suite) as tests: each `bookings-routes`, `qr-attempt`, `webhook`, `board` and `sse` test of `apps/server/test` that needs no clock control becomes one contract test with the same name in snake case. Time-dependent ones are not here (Task 15 maps them).
+- [x] **Step 2:** Run against the TS server: `PEY_BASE_URL=http://localhost:4010 pnpm --filter server dev` and `CONTRACT_TARGET=ts uv run pytest` → all pass. A failure is a bug in the suite, not in the TS server; the TS server is not modified.
+- [x] **Step 3:** Commit `test(contract): add black-box contract suite and fake pey`.
 
 ### Task 8: Booking domain (B) 
 
