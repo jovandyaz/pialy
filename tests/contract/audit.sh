@@ -11,4 +11,4 @@ trap 'rm -f "$requirements"' EXIT
 
 uv export --locked --quiet --directory "$root/tests/contract" --no-emit-project \
   --no-emit-package agent-toolkit-webhooks --format requirements.txt --output-file "$requirements"
-uv run --directory "$root/apps/api" pip-audit --disable-pip --requirement "$requirements"
+uv run --directory "$root/apps/api" pip-audit --strict --disable-pip --requirement "$requirements"

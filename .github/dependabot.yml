@@ -1,5 +1,5 @@
-# Keeps the SHA-pinned actions and the digest-pinned compose images current. Python and JS
-# dependencies are not listed: their lockfiles are audited in CI (pip-audit, pnpm audit).
+# Keeps the SHA-pinned actions and the compose images current. Python and JS dependencies are not
+# listed: their lockfiles are audited in CI (pip-audit, pnpm audit).
 version: 2
 updates:
   - package-ecosystem: github-actions
@@ -15,8 +15,9 @@ updates:
     commit-message:
       prefix: ci
 
-  # docker-compose.test.yml (and docker-compose.yml). After a bump, copy the digest into the
-  # matching service in .github/workflows/ci.yml.
+  # Only docker-compose.test.yml is digest-pinned; after a bump, copy its digest into the web
+  # service in .github/workflows/ci.yml. The api service digest there is bumped by hand until
+  # docker-compose.yml is pinned (deploy plan).
   - package-ecosystem: docker-compose
     directory: /
     schedule:

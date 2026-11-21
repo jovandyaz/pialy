@@ -63,8 +63,17 @@ jobs:
             printf '%s\n' "$changed"
             echo "::$stop::"
           fi
-          touches() { [ "$EVENT_NAME" != pull_request ] || grep -Eq "$1" <<<"$changed"; }
-          flag() { if touches "$1"; then echo true; else echo false; fi; }
+          # grep exits 0 on a match and 1 on none; anything else (a bad pattern) fails the step.
+          flag() {
+            if [ "$EVENT_NAME" != pull_request ]; then echo true; return; fi
+            local status=0
+            grep -Eq "$1" <<<"$changed" || status=$?
+            case $status in
+              0) echo true ;;
+              1) echo false ;;
+              *) echo "grep failed with exit $status on: $1" >&2; return "$status" ;;
+            esac
+          }
 
           every_job='^(\.github/workflows/|package\.json$|")'
           # The root .gitignore decides which files ruff (api) and eslint (web) see.
@@ -74,10 +83,14 @@ jobs:
           ts_server='^(apps/server/|packages/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig\.base\.json$|\.nvmrc$)'
           # Any JS or TS file, wherever it is, because `pnpm lint` runs `eslint .`.
           web='^(apps/web/|\.gitignore$)|\.[cm]?[jt]sx?$'
+          # Assigned first: a failing $(flag …) inside the echo block below would not stop the step.
+          run_api=$(flag "$every_job|$api")
+          run_web=$(flag "$every_job|$ts_server|$web")
+          run_contract=$(flag "$every_job|$api|$ts_server|^docker-compose\.test\.yml$")
           {
-            echo "api=$(flag "$every_job|$api")"
-            echo "web=$(flag "$every_job|$ts_server|$web")"
-            echo "contract=$(flag "$every_job|$api|$ts_server|^docker-compose\.test\.yml$")"
+            echo "api=$run_api"
+            echo "web=$run_web"
+            echo "contract=$run_contract"
           } | tee -a "$GITHUB_OUTPUT"
 
   api:
@@ -91,9 +104,10 @@ jobs:
       pnpm_config_verify_deps_before_run: 'false'
     services:
       # Same database as docker-compose.yml; the admin password is a throwaway for this runner.
+      # docker-compose.yml is not digest-pinned yet, so this digest is bumped by hand.
       # The health check uses TCP: during init the image runs a temporary server on the socket only.
       postgres:
-        image: postgres:16@sha256:3950ad7c3148ca2175ef1b6c36c9efbf78957ae8fbe8b3a5d7c35af50500382f # 16.16
+        image: postgres:16@sha256:3950ad7c3148ca2175ef1b6c36c9efbf78957ae8fbe8b3a5d7c35af50500382f
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -187,7 +201,7 @@ jobs:
       # Same database as docker-compose.test.yml, which the apps/server tests use. That file is the
       # reference for the image: Dependabot bumps its digest, then copy it here.
       postgres:
-        image: postgres:16-alpine@sha256:1d5b02d3a9941fbd52437db4107f8c52d6297dac553ca1e5c299ebb3756b4857 # 16.16
+        image: postgres:16-alpine@sha256:1d5b02d3a9941fbd52437db4107f8c52d6297dac553ca1e5c299ebb3756b4857
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
