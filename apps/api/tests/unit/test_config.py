@@ -1,6 +1,8 @@
 import base64
+from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from pialy.config import Settings, load_settings
 
@@ -143,3 +145,11 @@ def test_accepts_versioned_credentials_key_list(monkeypatch: pytest.MonkeyPatch)
         monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "CREDENTIALS_ENC_KEY": value}
     )
     assert load_settings().credentials_enc_key.get_secret_value() == value
+
+
+def test_env_example_leaves_every_secret_unset() -> None:
+    example = Path(__file__).resolve().parents[2] / ".env.example"
+    with pytest.raises(ValidationError) as exc:
+        Settings(_env_file=example)
+    failing = {str(issue["loc"][0]).upper() for issue in exc.value.errors()}
+    assert failing == set(SECRETS_ENV)
