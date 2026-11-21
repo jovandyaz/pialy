@@ -74,8 +74,11 @@ class RequestContextMiddleware:
                 status = message["status"]
                 MutableHeaders(scope=message)[REQUEST_ID_HEADER] = rid
             await send(message)
-            # ASGI: a body with `more_body` False (its default) completes the response.
-            if message["type"] == "http.response.body" and not message.get("more_body", False):
+            # ASGI: a body with `more_body` False (its default) completes the response, and so
+            # does `http.response.pathsend`, which hands the file to the server (no body follows).
+            if message["type"] == "http.response.pathsend" or (
+                message["type"] == "http.response.body" and not message.get("more_body", False)
+            ):
                 finished = True
 
         try:
@@ -86,9 +89,10 @@ class RequestContextMiddleware:
                 raise  # the status line already went out: nothing else can be sent
             await problem_response(500)(scope, receive, send_with_id)
         finally:
-            # Started but not finished: an error, a cancellation or a client that left mid-stream.
+            # Not finished: an error, a cancellation or a client that left, mid-stream or before
+            # anything was sent (then `status` is the 500 default, not what the client got).
             # The status is a field: in the text it would merge with a path ending in digits.
             fields: dict[str, int | bool] = {"status": status}
-            if started and not finished:
+            if not finished:
                 fields["aborted"] = True
             logger.info("%s %s", scope["method"], route_of(scope), extra=log_fields(**fields))

@@ -4,11 +4,12 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import httpx
 import pytest
 from fastapi import BackgroundTasks, FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from starlette.types import Message, Scope
 
 from pialy.clock import system_clock
@@ -256,3 +257,69 @@ def test_an_error_after_the_response_finished_is_logged_but_not_as_aborted(
     assert error["level"] == "ERROR"
     assert access["status"] == 200
     assert "aborted" not in access
+
+
+def test_a_file_sent_with_the_pathsend_extension_is_not_aborted(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    json_logs: None,
+    tmp_path: Path,
+) -> None:
+    # With `http.response.pathsend` the server sends the file itself: that message ends the
+    # response, there is no body message with `more_body` False after it.
+    app = make_app(monkeypatch)
+    file = tmp_path / "report.txt"
+    file.write_text("synthetic")
+
+    @app.get("/file")
+    async def serve_file() -> FileResponse:
+        return FileResponse(file)
+
+    sent: list[Message] = []
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    scope = http_scope("/file")
+    scope["extensions"] = {"http.response.pathsend": {}}
+    configure_logging("INFO")
+    asyncio.run(app(scope, connected, send))
+    assert [message["type"] for message in sent] == [
+        "http.response.start",
+        "http.response.pathsend",
+    ]
+    [access] = log_lines(capsys, "pialy.http")
+    assert access["status"] == 200
+    assert "aborted" not in access
+
+
+def test_a_request_cancelled_before_its_response_started_is_logged_as_aborted(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], json_logs: None
+) -> None:
+    app = make_app(monkeypatch)
+    in_handler = asyncio.Event()
+
+    @app.get("/slow")
+    async def slow() -> dict[str, str]:
+        in_handler.set()
+        await asyncio.Event().wait()  # never answers on its own
+        return {"ok": "yes"}
+
+    sent: list[Message] = []
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    async def run() -> None:
+        task = asyncio.create_task(app(http_scope("/slow"), connected, send))
+        await asyncio.wait_for(in_handler.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    configure_logging("INFO")
+    asyncio.run(run())
+    assert sent == []  # nothing went out
+    [access] = log_lines(capsys, "pialy.http")
+    assert access["status"] == 500  # the default, as nothing was sent
+    assert access["aborted"] is True
