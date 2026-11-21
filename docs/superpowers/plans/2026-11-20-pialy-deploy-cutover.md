@@ -37,7 +37,7 @@ D owns all tasks; A joins Task 5 (bank tests); the user approves every **[user]*
 **Files:** Create `apps/api/Dockerfile`, `.dockerignore`; Modify `.github/workflows/ci.yml` (add `docker` job: build, then run the image against the CI Postgres and hit `/readyz`)
 
 - Stage `web`: `node:22-alpine` pinned by digest, `corepack enable`, `pnpm install --frozen-lockfile --filter web...`, `pnpm --filter web build` (precompressed assets as today).
-- Stage `api`: `python:3.13-slim` pinned by digest, `uv` copied from `ghcr.io/astral-sh/uv` pinned, `uv sync --locked --no-dev --project apps/api`; copy `apps/web/dist` to `/app/web`; `USER 10001`; `ENV WEB_ROOT=/app/web`; `CMD ["uvicorn","pialy.main:app","--host","0.0.0.0","--port","${PORT}","--proxy-headers","--forwarded-allow-ips","*","--timeout-graceful-shutdown","10"]` (shell form for `$PORT`).
+- Stage `api`: `python:3.13-slim` pinned by digest, `uv` copied from `ghcr.io/astral-sh/uv` pinned, `uv sync --locked --no-dev --project apps/api`; copy `apps/web/dist` to `/app/web`; `USER 10001`; `ENV WEB_ROOT=/app/web`; `CMD ["uvicorn","pialy.main:app_factory","--factory","--host","0.0.0.0","--port","${PORT}","--proxy-headers","--forwarded-allow-ips","*","--timeout-graceful-shutdown","10"]` (shell form for `$PORT`).
 - [ ] **Step 1:** `docker build -f apps/api/Dockerfile .` succeeds; image runs as uid 10001; size < 400 MB.
 - [ ] **Step 2:** CI `docker` job green. Commit `build(api): add production docker image`.
 
