@@ -4,7 +4,8 @@ Python 3.13 backend (FastAPI, psycopg, Alembic), managed with uv. Root `AGENTS.m
 
 ## Commands (from the repo root)
 - `pnpm api:sync`: install locked dependencies.
-- `pnpm api:lint`: ruff, ruff format check, `mypy --strict`, import-linter.
+- `pnpm api:lint`: ruff, ruff format check, `mypy --strict` (`src`, `tests`, `migrations`),
+  import-linter.
 - `pnpm api:test`: pytest. Database tests need `docker compose -f docker-compose.test.yml up -d`;
   the script points `TEST_DATABASE_URL` (an admin URL of a disposable cluster: the fixtures reset
   the `pialy_owner`/`pialy_app` passwords) at it unless set. Without it they are skipped. They refuse
