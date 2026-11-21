@@ -8,7 +8,7 @@ services:
       PIALY_OWNER_PASSWORD: ${PIALY_OWNER_PASSWORD:?set PIALY_OWNER_PASSWORD}
       PIALY_APP_PASSWORD: ${PIALY_APP_PASSWORD:?set PIALY_APP_PASSWORD}
     ports:
-      - '${PIALY_DB_PORT:-5432}:5432'
+      - '127.0.0.1:${PIALY_DB_PORT:-5432}:5432'
     volumes:
       - pialy-pgdata:/var/lib/postgresql/data
       # The roles are created by the init script only on the first start, while the volume is
