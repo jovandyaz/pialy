@@ -1147,7 +1147,7 @@ provides-extras = ["sentry"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "httpx2" },
+    { name = "httpx2", specifier = ">=2,<3" },
     { name = "import-linter" },
     { name = "mypy" },
     { name = "pip-audit" },

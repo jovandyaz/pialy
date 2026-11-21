@@ -20,7 +20,7 @@ dependencies = [
 sentry = ["sentry-sdk>=2,<3"]
 
 [dependency-groups]
-dev = ["pytest", "ruff", "mypy", "import-linter", "pip-audit", "httpx2"]
+dev = ["pytest", "ruff", "mypy", "import-linter", "pip-audit", "httpx2>=2,<3"]
 
 [build-system]
 requires = ["hatchling"]
