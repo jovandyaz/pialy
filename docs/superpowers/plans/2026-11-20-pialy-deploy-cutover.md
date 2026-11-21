@@ -47,6 +47,7 @@ D owns all tasks; A joins Task 5 (bank tests); the user approves every **[user]*
 
 - `apps/api/railway.json`: `build.builder = "DOCKERFILE"`, `build.dockerfilePath = "apps/api/Dockerfile"`; `deploy.preDeployCommand = ["uv run --no-sync alembic upgrade head"]` (uses `MIGRATION_DATABASE_URL`); `deploy.healthcheckPath = "/readyz"`, `healthcheckTimeout = 60`; `restartPolicyType = "ON_FAILURE"`, `restartPolicyMaxRetries = 5`; `numReplicas = 1`. Confirm each key against docs.railway.com/config-as-code/reference before committing.
 - `bootstrap_roles.sql`: creates `pialy_owner` (owns schema) and `pialy_app` (`LOGIN NOSUPERUSER NOBYPASSRLS`), revokes `CREATE` on `public` from `PUBLIC`; run once by the operator with the Railway superuser URL.
+- Startup: the role and time-limit check (`Database.vet_connection`) connects on its own with `connect_timeout=5`, so an unreachable database host can delay startup by up to 5 s before the app logs it and starts (readiness then answers 503). Note it in the runbook.
 - [ ] **Step 1:** locally, `docker compose` + the image with a deliberately broken migration → pre-deploy exits 1 (Review Focus 1).
 - [ ] **Step 2:** Commit `build(api): add railway config with pre-deploy migrations`.
 
