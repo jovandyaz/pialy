@@ -5,10 +5,8 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Protocol
 
 import pytest
 from fastapi.testclient import TestClient
@@ -16,18 +14,9 @@ from fastapi.testclient import TestClient
 from pialy.clock import system_clock
 from pialy.config import Settings
 from pialy.main import create_app
+from tests.db.support import MIGRATIONS_DIR, AppUrlFactory, ThrowawayDatabaseFactory
 
-MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 PHONE = "5512345678"
-
-
-class OwnedDatabase(Protocol):
-    @property
-    def owner_url(self) -> str: ...
-
-
-type DatabaseFactory = Callable[[Path], AbstractContextManager[OwnedDatabase]]
-
 
 # Fails the migration unless env.py set the limits for online migrations.
 ASSERT_MIGRATION_LIMITS = """
@@ -63,7 +52,7 @@ def migrations_with(directory: Path, revisions: list[str]) -> Path:
 
 @pytest.fixture(scope="module")
 def at_head(
-    app_database_at: Callable[[Path], AbstractContextManager[str]],
+    app_database_at: AppUrlFactory,
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Iterator[tuple[str, Path]]:
     migrations = migrations_with(tmp_path_factory.mktemp("readyz") / "migrations", ["r0001"])
@@ -100,7 +89,7 @@ def test_readyz_is_503_when_the_code_is_ahead_of_the_database(
 
 
 def test_migrations_run_with_lock_and_statement_timeouts(
-    app_database_at: Callable[[Path], AbstractContextManager[str]], tmp_path: Path
+    app_database_at: AppUrlFactory, tmp_path: Path
 ) -> None:
     migrations = migrations_with(tmp_path / "migrations", [])
     add_revision(migrations, "r0001", None, ASSERT_MIGRATION_LIMITS)
@@ -108,7 +97,9 @@ def test_migrations_run_with_lock_and_statement_timeouts(
         pass  # the upgrade raised inside the factory if the limits were missing
 
 
-def test_the_alembic_cli_logs_redacted_json(database_at: DatabaseFactory, tmp_path: Path) -> None:
+def test_the_alembic_cli_logs_redacted_json(
+    database_at: ThrowawayDatabaseFactory, tmp_path: Path
+) -> None:
     # `alembic upgrade head` as a deploy runs it: the real alembic.ini and env.py, from the
     # directory that holds them. Alembic logs each revision's docstring as it runs it.
     shutil.copy(MIGRATIONS_DIR.parent / "alembic.ini", tmp_path / "alembic.ini")

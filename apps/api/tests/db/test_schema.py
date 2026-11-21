@@ -10,20 +10,17 @@ on a different rule than the one it names. Fixtures are synthetic.
 import hmac
 import secrets
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import AbstractContextManager, contextmanager
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from importlib.resources import files
-from pathlib import Path
-from typing import Protocol
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from agent_toolkit.audit_log import AuditEvent
 from alembic import command
-from alembic.config import Config
 from psycopg import errors, sql
 from psycopg.types.json import Jsonb
 from psycopg.types.range import Range
@@ -32,8 +29,8 @@ from pydantic import SecretStr
 from pialy.config import Settings
 from pialy.db.database import Database, PgConnection
 from pialy.tenancy.context import OwnerActor, TenantContext
+from tests.db.support import MIGRATIONS_DIR, RunAlembic, ThrowawayDatabase, ThrowawayDatabaseFactory
 
-MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 T0 = datetime(2026, 11, 20, 15, 0, tzinfo=UTC)
 SALT = b"schema-tests-only-salt"
 CLABE = "123456789012345678"
@@ -158,14 +155,7 @@ ORDER BY 1
 """
 
 
-class OwnedDatabase(Protocol):
-    @property
-    def owner_url(self) -> str: ...
-
-
 type Row = dict[str, object]
-type DatabaseFactory = Callable[[Path], AbstractContextManager[OwnedDatabase]]
-type RunAlembic = Callable[[str, Callable[[Config, str], None], str], None]
 
 
 @dataclass(frozen=True)
@@ -1423,7 +1413,7 @@ def version(conn: PgConnection) -> str:
 
 
 def test_upgrading_an_empty_database_creates_every_table(
-    migrated_database: OwnedDatabase,
+    migrated_database: ThrowawayDatabase,
 ) -> None:
     with psycopg.connect(migrated_database.owner_url) as conn:
         tables = conn.execute(
@@ -1499,7 +1489,7 @@ def owner_database(owner_url: str) -> Iterator[Database]:
 
 
 @pytest.fixture(scope="module")
-def fresh_owner_url(database_at: DatabaseFactory) -> Iterator[str]:
+def fresh_owner_url(database_at: ThrowawayDatabaseFactory) -> Iterator[str]:
     """A database of this module's own at head, so upgrading it again touches no other test."""
     with database_at(MIGRATIONS_DIR) as database:
         yield database.owner_url

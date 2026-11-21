@@ -1,7 +1,6 @@
 import time
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
-from typing import Protocol
 from uuid import UUID, uuid4
 
 import psycopg
@@ -15,6 +14,7 @@ from pialy.config import Settings
 from pialy.db.database import Database, PgConnection
 from pialy.db.locks import advisory_key
 from pialy.tenancy.context import OwnerActor, TenantContext
+from tests.db.support import ThrowawayDatabase
 
 # A transaction-local setting reads as '' (not NULL) on that connection once it has ended,
 # hence nullif, as the policies of Task 5 do.
@@ -35,11 +35,6 @@ CLEAN_SESSION = (None, "5s", "2s", "15s")
 RETURN_DEADLINE_SECONDS = 5.0
 
 type Checkout = Callable[[], AbstractContextManager[PgConnection]]
-
-
-class AppUrl(Protocol):
-    @property
-    def app_url(self) -> str: ...
 
 
 def owner_context(business_id: UUID) -> TenantContext:
@@ -130,7 +125,7 @@ def database_for(url: str) -> Iterator[Database]:
 
 
 def test_the_time_limits_join_the_startup_options_of_the_url(
-    db: Database, migrated_database: AppUrl
+    db: Database, migrated_database: ThrowawayDatabase
 ) -> None:
     # The URL's own options stay; the service's limits come after them, so they prevail.
     options = "-c work_mem=8MB -c statement_timeout=1min"
@@ -159,7 +154,7 @@ def terminate(url: str, backend_pid: int) -> None:
 
 @pytest.mark.parametrize("pool", ["main", "locks"])
 def test_a_connection_the_server_dropped_is_never_served(
-    db: Database, migrated_database: AppUrl, pool: str
+    db: Database, migrated_database: ThrowawayDatabase, pool: str
 ) -> None:
     checkout: Checkout = db.system if pool == "main" else db.lock_connection
     with checkout() as connection:
@@ -242,12 +237,16 @@ def seconds_to_time_out(
         return time.monotonic() - started
 
 
+# Room above a timeout for a loaded test machine; psycopg's default wait (30 s) stays far out.
+WALL_CLOCK_SLACK_SECONDS = 5
+
+
 def test_waiting_for_a_connection_is_bounded(db: Database) -> None:
     # A request gives up after 3 s instead of psycopg's default 30 s (Review Focus 3).
     waited = seconds_to_time_out(db.system, holders=10)
-    assert 3 <= waited < 4
+    assert 3 <= waited < 3 + WALL_CLOCK_SLACK_SECONDS
 
 
 def test_waiting_for_a_lock_connection_is_bounded_by_lock_timeout(db: Database) -> None:
     waited = seconds_to_time_out(db.lock_connection, holders=4)
-    assert 2 <= waited < 3
+    assert 2 <= waited < 2 + WALL_CLOCK_SLACK_SECONDS

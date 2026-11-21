@@ -15,7 +15,6 @@ import ipaddress
 import os
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
-from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -29,8 +28,15 @@ from pydantic import SecretStr
 
 from pialy.config import Settings
 from pialy.db.database import Database
+from tests.db.support import (
+    MIGRATIONS_DIR,
+    AlembicCommand,
+    AppUrlFactory,
+    RunAlembic,
+    ThrowawayDatabase,
+    ThrowawayDatabaseFactory,
+)
 
-MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 SKIP_REASON = (
     "TEST_DATABASE_URL is not set: run `pnpm api:test` with docker-compose.test.yml up, "
     "or export it with an admin URL"
@@ -41,18 +47,6 @@ ROLES_LOCK_KEY = 7_400_231  # serializes role setup between test sessions sharin
 DISPOSABLE_OPT_IN = "PIALY_TEST_DB_DISPOSABLE"
 # libpq environment variables that choose the server when the URL does not (libpq-envars).
 HOST_VARIABLES = ("PGHOST", "PGHOSTADDR")
-
-type AppDatabaseFactory = Callable[[Path], AbstractContextManager[str]]
-type DatabaseFactory = Callable[[Path], AbstractContextManager[ThrowawayDatabase]]
-type AlembicCommand = Callable[[Config, str], None]
-type RunAlembic = Callable[[str, AlembicCommand, str], None]
-
-
-@dataclass(frozen=True)
-class ThrowawayDatabase:
-    name: str
-    owner_url: str
-    app_url: str
 
 
 def ensure_roles(admin_url: str) -> None:
@@ -241,7 +235,7 @@ def owner_db(owner_database: Database, migrated_database: ThrowawayDatabase) -> 
 
 
 @pytest.fixture(scope="session")
-def database_at(admin_url: str) -> DatabaseFactory:
+def database_at(admin_url: str) -> ThrowawayDatabaseFactory:
     """A further throwaway database at head of the given migrations."""
 
     def factory(migrations_dir: Path) -> AbstractContextManager[ThrowawayDatabase]:
@@ -251,7 +245,7 @@ def database_at(admin_url: str) -> DatabaseFactory:
 
 
 @pytest.fixture(scope="session")
-def app_database_at(database_at: DatabaseFactory) -> AppDatabaseFactory:
+def app_database_at(database_at: ThrowawayDatabaseFactory) -> AppUrlFactory:
     """A further throwaway database at head of the given migrations; yields pialy_app's URL."""
 
     @contextmanager
