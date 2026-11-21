@@ -60,12 +60,15 @@ def _reset_session(connection: PgConnection) -> None:
 class Database:
     def __init__(self, settings: Settings) -> None:
         conninfo = _with_session_limits(settings.database_url.get_secret_value())
+        # Both pools check a connection before serving it (one empty query), so one the server
+        # dropped while it sat idle (a restart, an idle cutoff) is replaced, not handed out.
         self._pool: ConnectionPool[PgConnection] = ConnectionPool(
             conninfo,
             kwargs={"connect_timeout": CONNECT_TIMEOUT_SECONDS},
             min_size=POOL_MIN_SIZE,
             max_size=POOL_MAX_SIZE,
             open=False,
+            check=ConnectionPool.check_connection,
             reset=_reset_session,
             timeout=POOL_TIMEOUT_SECONDS,
             name="pialy",
@@ -78,6 +81,7 @@ class Database:
             min_size=LOCK_POOL_MIN_SIZE,
             max_size=LOCK_POOL_MAX_SIZE,
             open=False,
+            check=ConnectionPool.check_connection,
             reset=_reset_session,
             timeout=LOCK_POOL_TIMEOUT_SECONDS,
             name="pialy-locks",

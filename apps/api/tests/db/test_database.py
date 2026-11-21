@@ -142,6 +142,38 @@ def test_the_time_limits_join_the_startup_options_of_the_url(
             assert (limits, work_mem) == (("5s", "2s", "15s"), ("8MB",))
 
 
+def terminate(url: str, backend_pid: int) -> None:
+    """End a backend from the server side, as a restart or an idle cutoff would."""
+    with psycopg.connect(url, autocommit=True) as connection:
+        connection.execute("SELECT pg_terminate_backend(%s)", (backend_pid,))
+        deadline = time.monotonic() + RETURN_DEADLINE_SECONDS
+        while time.monotonic() < deadline:
+            gone = connection.execute(
+                "SELECT NOT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid = %s)", (backend_pid,)
+            ).fetchone()
+            if gone == (True,):
+                return
+            time.sleep(0.05)
+    pytest.fail(f"backend {backend_pid} did not end", pytrace=False)
+
+
+@pytest.mark.parametrize("pool", ["main", "locks"])
+def test_a_connection_the_server_dropped_is_never_served(
+    db: Database, migrated_database: AppUrl, pool: str
+) -> None:
+    checkout: Checkout = db.system if pool == "main" else db.lock_connection
+    with checkout() as connection:
+        dropped = connection.info.backend_pid
+    # The pool resets a returned connection in the background (milliseconds); the server drops
+    # this one only once it sits idle in the pool, as after a restart.
+    time.sleep(0.5)
+    terminate(migrated_database.app_url, dropped)
+    for _ in range(2 * db.max_size):  # more checkouts than the pool holds connections
+        with checkout() as connection:
+            assert connection.execute("SELECT 1").fetchone() == (1,)
+            assert connection.info.backend_pid != dropped
+
+
 def test_statement_timeout_applies(db: Database) -> None:
     with pytest.raises(errors.QueryCanceled), db.system() as connection:
         connection.execute("SELECT pg_sleep(6)")
