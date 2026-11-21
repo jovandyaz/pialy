@@ -1028,6 +1028,37 @@ def test_payment_events_reject_projection_fields_of_another_type_or_shape(
         add_event(conn, business.id, raw=Jsonb(raw))
 
 
+# The tracking_key column holds the same clave de rastreo as raw's metadata.trackingKey, under
+# the same rule, so it cannot carry an account number either.
+@pytest.mark.parametrize(
+    "tracking_key",
+    ["TRACK123", "0192191042", "A" * 30, "12345678901234", None],
+    ids=["alphanumeric", "digits-like-the-fixture", "longest", "longest-digits-only", "null"],
+)
+def test_payment_events_accept_a_tracking_key_of_the_projection_shape(
+    owner_db: Database, tracking_key: str | None
+) -> None:
+    business = create_business(owner_db)
+    with owner_db.tenant(context(business.id)) as conn:
+        add_event(conn, business.id, tracking_key=tracking_key)
+
+
+@pytest.mark.parametrize(
+    "tracking_key",
+    [CLABE, "1234567890123456", "123456789012345", "A" * 31, "0192 191042", ""],
+    ids=["clabe", "card", "15-digits", "too-long", "spaces", "empty"],
+)
+def test_payment_events_reject_a_tracking_key_outside_the_projection_shape(
+    owner_db: Database, tracking_key: str
+) -> None:
+    business = create_business(owner_db)
+    with (
+        violates(errors.CheckViolation, "payment_events_tracking_key_check"),
+        owner_db.tenant(context(business.id)) as conn,
+    ):
+        add_event(conn, business.id, tracking_key=tracking_key)
+
+
 # --- money: integer minor units, ISO 4217 currency, payments-core invariants ---
 
 

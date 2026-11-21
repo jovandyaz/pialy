@@ -257,7 +257,12 @@ STATEMENTS = (
             CONSTRAINT payment_events_amount_check CHECK (amount_minor > 0),
         currency          text        NOT NULL
             CONSTRAINT payment_events_currency_check CHECK (currency {CURRENCY}),
-        tracking_key      text,
+        -- The SPEI clave de rastreo raw keeps as metadata.trackingKey, under the same rule.
+        tracking_key      text
+            CONSTRAINT payment_events_tracking_key_check CHECK (
+                tracking_key IS NULL
+                OR (tracking_key ~ '{TRACKING_KEY}' AND tracking_key !~ '{ACCOUNT_NUMBER}')
+            ),
         late              boolean     NOT NULL DEFAULT false,
         raw               jsonb       NOT NULL,
         created_at        timestamptz NOT NULL DEFAULT now(),
