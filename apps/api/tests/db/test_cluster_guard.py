@@ -84,6 +84,39 @@ def test_accepts_libpq_host_variables_on_this_machine(
         refuse_unless_disposable(url, environ)
 
 
+# A service (pg_service.conf) supplies the host, hostaddr and port the URL leaves out, from a file
+# the guard does not read, so naming one is refused whatever the URL says.
+@pytest.mark.parametrize(
+    ("url", "environ", "named"),
+    [
+        ("service=pialy dbname=pialy_test user=postgres", {}, "TEST_DATABASE_URL"),
+        (
+            "postgresql://postgres:postgres@localhost:54329/pialy_test?service=pialy",
+            {},
+            "TEST_DATABASE_URL",
+        ),
+        (LOCAL_URLS[0], {"PGSERVICE": "pialy"}, "PGSERVICE"),
+        (LOCAL_URLS[1], {"PGSERVICEFILE": "/etc/pg_service.conf"}, "PGSERVICEFILE"),
+    ],
+    ids=["url-service", "uri-service", "pgservice", "pgservicefile"],
+)
+def test_refuses_a_libpq_service(
+    refuse_unless_disposable: Guard, url: str, environ: dict[str, str], named: str
+) -> None:
+    with pytest.raises(pytest.fail.Exception, match=named) as failure:
+        refuse_unless_disposable(url, environ)
+    assert "PIALY_TEST_DB_DISPOSABLE" in str(failure.value)
+    assert "postgres:postgres" not in str(failure.value)
+
+
+def test_a_disposable_cluster_may_be_reached_through_a_service(
+    refuse_unless_disposable: Guard,
+) -> None:
+    refuse_unless_disposable(
+        "service=pialy dbname=pialy_test", {"PGSERVICE": "pialy", "PIALY_TEST_DB_DISPOSABLE": "1"}
+    )
+
+
 def test_a_disposable_cluster_may_be_reached_through_pghost(
     refuse_unless_disposable: Guard,
 ) -> None:

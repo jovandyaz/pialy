@@ -6,9 +6,10 @@ throwaway database owned by `pialy_owner`, migrated to head as `pialy_owner`, an
 tests as `pialy_app` (not superuser, not owner, no BYPASSRLS). The database is dropped at the end.
 The two roles are cluster-wide and their passwords are reset to the synthetic ones below, so the
 fixtures refuse (fail, not skip) a cluster that is not on this machine, whether the URL or
-PGHOST/PGHOSTADDR names it, unless PIALY_TEST_DB_DISPOSABLE=1 marks it disposable, as for a CI job
-that reaches its Postgres service container by label. Loopback alone cannot tell the test cluster
-from a local dev one.
+PGHOST/PGHOSTADDR names it, and a libpq service (`service=`, PGSERVICE, PGSERVICEFILE), whose file
+could name any host, unless PIALY_TEST_DB_DISPOSABLE=1 marks the cluster disposable, as for a CI
+job that reaches its Postgres service container by label. Loopback alone cannot tell the test
+cluster from a local dev one.
 """
 
 import ipaddress
@@ -47,6 +48,9 @@ ROLES_LOCK_KEY = 7_400_231  # serializes role setup between test sessions sharin
 DISPOSABLE_OPT_IN = "PIALY_TEST_DB_DISPOSABLE"
 # libpq environment variables that choose the server when the URL does not (libpq-envars).
 HOST_VARIABLES = ("PGHOST", "PGHOSTADDR")
+# libpq environment variables that name a service, or its file, whose settings fill in what the
+# URL leaves out (libpq-pgservice).
+SERVICE_VARIABLES = ("PGSERVICE", "PGSERVICEFILE")
 
 
 def ensure_roles(admin_url: str) -> None:
@@ -154,6 +158,8 @@ def _refuse_unless_disposable(admin_url: str, environ: Mapping[str, str]) -> Non
     libpq reads PGHOST and PGHOSTADDR when the URL leaves host or hostaddr out, and a hostaddr
     replaces the address that host would resolve to. Either one off this machine is refused even
     beside an explicit URL host, so no mix of URL and environment can lead the fixtures elsewhere.
+    A service fills in host, hostaddr and port from a file this guard does not read, so naming
+    one, in the URL or the environment, is refused too.
     """
     if environ.get(DISPOSABLE_OPT_IN) == "1":
         return
@@ -162,16 +168,19 @@ def _refuse_unless_disposable(admin_url: str, environ: Mapping[str, str]) -> Non
         "TEST_DATABASE_URL": ",".join(str(params.get(key) or "") for key in ("host", "hostaddr")),
         **{name: environ.get(name, "") for name in HOST_VARIABLES},
     }
-    remote = [
-        f"{name} points at {', '.join(hosts)}"
+    reasons = [
+        f"{name} points at {', '.join(hosts)}, not this machine"
         for name, value in targets.items()
         if (hosts := _remote_hosts(value))
     ]
-    if remote:
+    if params.get("service"):
+        reasons.append("TEST_DATABASE_URL names a libpq service")
+    reasons += [f"{name} is set" for name in SERVICE_VARIABLES if environ.get(name)]
+    if reasons:
         pytest.fail(
-            f"{'; '.join(remote)}: not this machine. The db fixtures reset the pialy_owner and "
-            "pialy_app passwords cluster-wide, so they only run against localhost, 127.0.0.1 or "
-            f"::1, or a cluster marked disposable with {DISPOSABLE_OPT_IN}=1.",
+            f"{'; '.join(reasons)}. The db fixtures reset the pialy_owner and pialy_app passwords "
+            "cluster-wide, so they only run against localhost, 127.0.0.1 or ::1 named without a "
+            f"libpq service, or a cluster marked disposable with {DISPOSABLE_OPT_IN}=1.",
             pytrace=False,
         )
 
