@@ -66,13 +66,14 @@ _CHAIN_SEP = r"[\s.,/_\-:|()T]{1,3}"
 _DIGIT_CHAIN = re.compile(rf"(?<!\d)\+?\(?\d+(?:{_CHAIN_SEP}\d+)*")
 # The only exemption besides canonical UUIDs (split out before this runs): a chain that is a valid
 # ISO 8601 date or timestamp, or a list of them. Month, day, hour, minute, second and offset are
-# range-checked and the fraction has at most 9 digits, so no invalid part can shelter a number.
+# range-checked and the fraction has at most 6 digits (microseconds, what `datetime.isoformat`
+# writes), so no invalid part can shelter a number: with 8, `:55.12345678` holds a whole phone.
 # Each timestamp is atomic and the list possessive, so a failed match never backtracks into them.
 _MONTH = r"(?:0[1-9]|1[0-2])"
 _DAY = r"(?:0[1-9]|[12]\d|3[01])"
 _HOUR = r"(?:[01]\d|2[0-3])"
 _MINUTE = r"[0-5]\d"  # seconds too
-_ISO_TIME = rf"{_HOUR}:{_MINUTE}(?::{_MINUTE}(?:[.,]\d{{1,9}})?)?(?:[+-]{_HOUR}:{_MINUTE})?"
+_ISO_TIME = rf"{_HOUR}:{_MINUTE}(?::{_MINUTE}(?:[.,]\d{{1,6}})?)?(?:[+-]{_HOUR}:{_MINUTE})?"
 _ISO_TIMESTAMP = rf"(?>\d{{4}}-{_MONTH}-{_DAY}(?:[T ]{_ISO_TIME})?)"
 _TIMESTAMPS_ONLY = re.compile(rf"{_ISO_TIMESTAMP}(?:{_CHAIN_SEP}{_ISO_TIMESTAMP})*+")
 _HEX = "[0-9a-fA-F]"

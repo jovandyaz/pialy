@@ -658,7 +658,7 @@ def test_spaced_account_next_to_a_phone_redacts_both() -> None:
         "at 2026-11-21T01:48:00.123456+00:00",
         "at 2026-11-21T01:48:00.123-05:00",
         "at 2026-11-21T01:48",
-        "at 2026-11-21T01:48:00.123456789Z",  # nanoseconds
+        "at 2026-11-21T01:48:00.123456Z",  # microseconds, what `datetime.isoformat` writes
         "date=2026-11-15",
         "range 2026-11-15 2026-11-16",
         "range 2026-11-15-2026-11-16",
@@ -711,6 +711,10 @@ def test_any_chain_of_10_or_more_digits_is_redacted(text: str, expected: str) ->
         ("at 2026-11-21T01:61:00Z", "at [digits]Z"),  # minute 61
         ("at 2026-11-21T01:48:61Z", "at [digits]Z"),  # second 61
         ("at 2026-11-21T01:48:00.5512345678Z", "at [digits]Z"),  # a 10-digit fraction
+        # Over 6 fraction digits the seconds and fraction could hold a phone: 55 + 12345678.
+        ("at 2026-11-15T12:34:55.12345678", "at [digits]"),
+        ("at 2026-11-15T12:34:55.1234567Z", "at [digits]Z"),  # 7 digits
+        ("at 2026-11-21T01:48:00.123456789Z", "at [digits]Z"),  # nanoseconds
         ("at 2026-11-21T01:48:00-25:00", "at [digits]"),  # offset hour 25
         ("2026-11-21 5512345678", "[digits]"),
         ("2026-11-21T01:48:00 5512345678", "[digits]"),
