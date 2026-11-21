@@ -29,6 +29,9 @@ def database_readiness(database: Database, migrations_dir: Path) -> ReadinessChe
     """A check that runs SELECT 1 on the pool and compares `alembic_version` with the head.
 
     The head is the code's, read once here (it imports every revision), not on each probe.
+    So a broken migrations directory (a revision that does not import, a dangling down_revision)
+    raises here, when the app is built, on purpose: the service fails fast instead of starting
+    with a readiness check that can never pass. A missing one is no head, and never ready.
     The check reads `alembic_version` as the service role, which needs SELECT on that table.
     """
     head = migrations_head(migrations_dir)

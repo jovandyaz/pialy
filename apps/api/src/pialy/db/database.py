@@ -103,7 +103,12 @@ def _vet_connection(connection: PgConnection) -> None:
 
 
 def _with_session_limits(conninfo: str) -> str:
-    """`conninfo` with SESSION_LIMITS after its own startup options, which it keeps."""
+    """`conninfo` with SESSION_LIMITS after its own startup options, which it keeps.
+
+    The result always sets `options`, so libpq does not read PGOPTIONS from the environment
+    (libpq-envars: a default for what the connection string leaves out). That is intended: only
+    the URL can add startup options, and the limits come last, so they prevail.
+    """
     own = conninfo_to_dict(conninfo).get("options")
     return make_conninfo(conninfo, options=f"{own} {SESSION_LIMITS}" if own else SESSION_LIMITS)
 
