@@ -5,6 +5,8 @@ name: CI
 # reports success to branch protection.
 on:
   pull_request:
+    # `edited` covers a change of base branch, which changes what the checks must cover.
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
 
@@ -44,7 +46,9 @@ jobs:
           # A pull request runs the jobs whose inputs it touches; a push to main runs every job.
           if [ "$EVENT_NAME" = pull_request ]; then
             # --no-renames lists a moved file under both paths, so moving it out still counts.
-            changed=$(git diff --no-renames --name-only "$BASE_SHA...HEAD")
+            # core.quotePath=false prints non-ASCII names as they are; git still quotes names with a
+            # tab, newline, `"` or `\`, and those run every job below.
+            changed=$(git -c core.quotePath=false diff --no-renames --name-only "$BASE_SHA...HEAD")
             # The pull request picks these names: print them with workflow commands turned off.
             stop=$(openssl rand -hex 16)
             echo "::stop-commands::$stop"
@@ -54,12 +58,13 @@ jobs:
           touches() { [ "$EVENT_NAME" != pull_request ] || grep -Eq "$1" <<<"$changed"; }
           flag() { if touches "$1"; then echo true; else echo false; fi; }
 
-          every_job='^(\.github/workflows/|package\.json$)'
-          api='^(apps/api/|tests/contract/|infra/postgres/)'
+          every_job='^(\.github/workflows/|package\.json$|")'
+          api='^(apps/api/|tests/contract/|infra/postgres/|\.nvmrc$)'
           # The TS server and its toolchain: the web job tests them and, until the suite targets
           # the Python app, the contract suite runs against them.
-          ts_server='^(apps/server/|packages/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|\.nvmrc$)'
-          web='^(apps/web/|eslint\.config\.js$|tsconfig\.base\.json$|vitest\.config\.ts$)'
+          ts_server='^(apps/server/|packages/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig\.base\.json$|\.nvmrc$)'
+          # Any JS or TS file, wherever it is, because `pnpm lint` runs `eslint .`.
+          web='^apps/web/|\.[cm]?[jt]sx?$'
           {
             echo "api=$(flag "$every_job|$api")"
             echo "web=$(flag "$every_job|$ts_server|$web")"
@@ -72,8 +77,12 @@ jobs:
     if: ${{ !cancelled() && needs.changes.outputs.api != 'false' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    env:
+      # This job runs only uv through pnpm, so pnpm must not install the JS dependencies first.
+      pnpm_config_verify_deps_before_run: 'false'
     services:
       # Same database as docker-compose.yml; the admin password is a throwaway for this runner.
+      # The health check uses TCP: during init the image runs a temporary server on the socket only.
       postgres:
         image: postgres:16
         env:
@@ -83,7 +92,7 @@ jobs:
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d pialy"
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d pialy"
           --health-interval 2s
           --health-timeout 3s
           --health-retries 20
@@ -114,7 +123,7 @@ jobs:
       - run: pnpm api:sync
       - run: pnpm api:lint
       - run: pnpm api:test
-      - run: uv run --directory apps/api pip-audit
+      - run: pnpm api:audit
 
   contract:
     needs: changes
@@ -135,13 +144,15 @@ jobs:
           version: 0.13.6
           cache-dependency-glob: tests/contract/uv.lock
       - run: pnpm install --frozen-lockfile
-      # Against the TS server until Task 18 of the foundation plan switches it to the Python app.
+      # Synced here so a dependency failure shows as such, not as the fake pey never starting.
+      - run: pnpm contract:sync
+      # The TS server is the backend in production; the Python app does not serve these routes yet.
       - name: Contract suite against the TS server
         env:
           TMPDIR: ${{ runner.temp }}
-        run: tests/contract/run-ts.sh
+        run: pnpm contract:ts
       - name: Server and fake pey logs
-        if: failure()
+        if: failure() || cancelled()
         run: |
           shopt -s nullglob
           logs=("$RUNNER_TEMP"/tmp.*/*.log)
@@ -167,7 +178,7 @@ jobs:
         ports:
           - 54329:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d pialy_test"
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d pialy_test"
           --health-interval 2s
           --health-timeout 3s
           --health-retries 20
@@ -184,8 +195,8 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
-      - run: pnpm -r build
-      - run: pnpm audit --prod --audit-level high
+      - run: pnpm build
+      - run: pnpm audit:prod
 
   gitleaks:
     runs-on: ubuntu-24.04
