@@ -132,13 +132,30 @@ def _message_of(record: logging.LogRecord) -> str:
             return f"[unprintable log message]{FORMAT_ERROR_MARKER}"
 
 
+UNREDACTABLE_MESSAGE = "[log record could not be redacted]"
+
+
 class RedactingFilter(logging.Filter):
     """Rewrite the record so that nothing downstream can see the unredacted text.
 
-    Never raises: a logging call must not fail the code that made it.
+    Never raises: a logging call must not fail the code that made it. If redacting a record
+    fails for any reason, the line is kept but its content is replaced by a fixed marker.
     """
 
     def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            self._redact(record)
+        except Exception:  # last resort: drop everything that could not be redacted
+            record.msg = UNREDACTABLE_MESSAGE
+            record.args = None
+            record.exc_info = None
+            record.exc_text = None
+            record.stack_info = None
+            setattr(record, _FIELDS_ATTR, {})
+        return True
+
+    @staticmethod
+    def _redact(record: logging.LogRecord) -> None:
         record.msg = redact(_message_of(record))
         record.args = None
         if record.exc_info:
@@ -151,7 +168,6 @@ class RedactingFilter(logging.Filter):
         fields: Mapping[str, str | int] | None = getattr(record, _FIELDS_ATTR, None)
         if fields is not None:
             setattr(record, _FIELDS_ATTR, {k: _redact_field(v) for k, v in fields.items()})
-        return True
 
 
 def _redact_field(value: str | int) -> str | int:

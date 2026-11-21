@@ -364,6 +364,21 @@ def test_an_unprintable_message_never_raises_into_the_caller(
     assert line["message"] == "[unprintable log message] [log format error]"
 
 
+def test_a_record_whose_exception_cannot_be_formatted_is_replaced_not_raised(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configure_logging("INFO")
+    # A malformed exc_info makes `formatException` raise: the filter must still not.
+    logging.getLogger("x").error(f"call {PHONE}", exc_info=(1, 2, 3))  # type: ignore[arg-type]
+    logging.getLogger("x").info("next line is fine")
+    broken, after = lines(capsys)
+    assert broken["message"] == "[log record could not be redacted]"
+    assert broken["level"] == "ERROR"
+    assert "exc" not in broken
+    assert PHONE not in json.dumps(broken)
+    assert after["message"] == "next line is fine"
+
+
 def test_business_id_is_empty_until_bound(capsys: pytest.CaptureFixture[str]) -> None:
     configure_logging("INFO")
     start_request_context()
