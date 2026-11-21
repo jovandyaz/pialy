@@ -371,15 +371,17 @@ class _JsonStreamHandler(logging.StreamHandler[TextIO]):
 
 
 def configure_logging(level: str) -> None:
-    """Send every log record, uvicorn's included, through one redacting JSON handler."""
-    name = level.upper()
-    if name not in logging.getLevelNamesMapping():
+    """Send every log record, uvicorn's included, through one redacting JSON handler.
+
+    `level` is a level name in capitals, as `Settings.log_level` holds it.
+    """
+    if level not in logging.getLevelNamesMapping():
         raise ValueError(f"unknown log level: {level!r}")
     handler = _JsonStreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
     root.handlers[:] = [handler]
-    root.setLevel(name)
+    root.setLevel(level)
     for uvicorn_logger in _UVICORN_LOGGERS:
         logging.getLogger(uvicorn_logger).handlers.clear()
         logging.getLogger(uvicorn_logger).propagate = True

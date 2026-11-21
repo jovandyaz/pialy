@@ -10,11 +10,19 @@ import binascii
 import os
 import secrets
 from pathlib import Path
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 import psycopg
 from psycopg.conninfo import conninfo_to_dict
-from pydantic import AnyHttpUrl, Field, SecretStr, ValidationError, field_validator, model_validator
+from pydantic import (
+    AnyHttpUrl,
+    BeforeValidator,
+    Field,
+    SecretStr,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENC_KEY_BYTES = 32
@@ -27,6 +35,10 @@ def _random_secret() -> SecretStr:
 
 def _random_enc_key() -> SecretStr:
     return SecretStr(base64.b64encode(secrets.token_bytes(ENC_KEY_BYTES)).decode())
+
+
+def _upper(value: object) -> object:
+    return value.upper() if isinstance(value, str) else value
 
 
 def _check_enc_key_entry(entry: str) -> None:
@@ -57,7 +69,9 @@ class Settings(BaseSettings):
     public_origin: AnyHttpUrl = AnyHttpUrl("http://localhost:3000")
     audit_hmac_key: SecretStr = Field(min_length=32)
     sentry_dsn: SecretStr | None = None
-    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    log_level: Annotated[
+        Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], BeforeValidator(_upper)
+    ] = "INFO"  # any case: `info` is read as `INFO`
 
     @model_validator(mode="before")
     @classmethod

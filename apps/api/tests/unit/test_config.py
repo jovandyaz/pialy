@@ -224,7 +224,17 @@ def test_accepts_the_standard_log_levels(monkeypatch: pytest.MonkeyPatch, value:
     assert load_settings().log_level == value
 
 
-@pytest.mark.parametrize("value", ["LOUD", "info", "5512345678"])
+@pytest.mark.parametrize(
+    "value, level", [("info", "INFO"), ("Warning", "WARNING"), ("debug", "DEBUG")]
+)
+def test_accepts_a_log_level_in_any_case_and_stores_it_in_capitals(
+    monkeypatch: pytest.MonkeyPatch, value: str, level: str
+) -> None:
+    set_env(monkeypatch, {**DEV_ENV, "LOG_LEVEL": value})
+    assert load_settings().log_level == level
+
+
+@pytest.mark.parametrize("value", ["LOUD", "loud", "warn", " info", "5512345678"])
 def test_rejects_an_unknown_log_level_naming_only_the_variable(
     monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:

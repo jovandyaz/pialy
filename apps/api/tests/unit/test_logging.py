@@ -499,11 +499,13 @@ def test_a_failing_stream_without_stderr_does_not_raise(monkeypatch: pytest.Monk
 
 
 def test_level_filters_and_rejects_unknown(capsys: pytest.CaptureFixture[str]) -> None:
-    configure_logging("warning")
+    configure_logging("WARNING")
     logging.getLogger("x").info("hidden")
     assert capsys.readouterr().out == ""
     with pytest.raises(ValueError, match="log level"):
         configure_logging("LOUD")
+    with pytest.raises(ValueError, match="log level"):
+        configure_logging("warning")  # settings normalize LOG_LEVEL; this takes it as given
 
 
 def test_uvicorn_error_logs_flow_through_the_redacting_handler(
