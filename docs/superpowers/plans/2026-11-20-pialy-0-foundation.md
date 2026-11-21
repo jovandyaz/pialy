@@ -90,8 +90,8 @@ docker-compose.yml             postgres:16 + fake pey for local
 ### Task 1: Scaffold `apps/api`, settings and app factory (B)
 
 **Files:**
-- Create: `apps/api/pyproject.toml`, `apps/api/.python-version` (`3.13`), `apps/api/.importlinter`, `apps/api/src/pialy/{__init__,config,clock,main}.py`, `apps/api/tests/conftest.py`, `apps/api/tests/unit/test_config.py`, `docker-compose.yml`, `apps/api/AGENTS.md`, `apps/api/CLAUDE.md` (`@AGENTS.md`), root `AGENTS.md` (repo map, pnpm + uv commands, pointers to the spec and plans) and root `CLAUDE.md` (`@AGENTS.md`)
-- Modify: root `package.json` scripts
+- Create: `apps/api/pyproject.toml`, `apps/api/.python-version` (`3.13`), `apps/api/.importlinter`, `apps/api/src/pialy/{__init__,config,clock,main}.py`, `apps/api/tests/conftest.py`, `apps/api/tests/unit/test_config.py`, `docker-compose.yml`, `apps/api/AGENTS.md`, `apps/api/CLAUDE.md` (`@AGENTS.md`)
+- Modify: root `package.json` scripts, root `AGENTS.md` (mark the `api:*` commands as available)
 
 **Interfaces:**
 - Produces: `Settings` (pydantic-settings, frozen) with `env: Literal["development","test","production"]`, `port: int = 3000`, `database_url: SecretStr`, `migration_database_url: SecretStr | None`, `pey_base_url: AnyHttpUrl`, `phone_hash_salt: SecretStr`, `session_secret: SecretStr` (≥ 32 chars), `credentials_enc_key: SecretStr` (base64 of 32 bytes, optionally `v<N>:` prefixed list for rotation), `deposit_max_minor: int` (default 1), `web_root: Path | None`, `public_origin: AnyHttpUrl`, `audit_hmac_key: SecretStr` (≥ 32 bytes, for `audit_log.hash_payload`), `sentry_dsn: SecretStr | None`, `log_level: str = "INFO"`; `load_settings() -> Settings` exits the process with only the variable names on error. `Clock = Callable[[], datetime]` (aware UTC). `create_app(settings: Settings, clock: Clock) -> FastAPI`.
