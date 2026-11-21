@@ -974,7 +974,9 @@ def test_payment_events_reject_fields_outside_the_projection(
 DATE_PAID_IN_RAW: list[tuple[str, object]] = [
     ("fixture", DATE_PAID),
     ("first-second-of-2020", 1_577_836_800),
+    ("before-2020", 1_577_836_799),
     ("after-2033-05-18", 2_000_000_000),
+    ("2100", 4_102_444_800),
     ("string", str(DATE_PAID)),
     ("fraction", DATE_PAID + 0.5),
     ("milliseconds", DATE_PAID * 1000),
