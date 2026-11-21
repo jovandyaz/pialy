@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import logging
+import random
 import time
 import uuid
 from collections.abc import Iterator
@@ -537,6 +538,30 @@ def test_base64_keys_are_redacted_whole(key: str) -> None:
 
 def test_a_versioned_key_list_is_redacted_entry_by_entry() -> None:
     assert redact(f"v2:{STANDARD_KEY},v1:{PADDED_KEY}") == "v2:[token],v1:[token]"
+
+
+PROPERTY_SEED = 20261121
+PROPERTY_KEYS = 2_000
+
+
+def random_unpadded_keys(*, urlsafe: bool) -> list[str]:
+    """Reproducible random keys of 32 to 64 characters (24 to 48 bytes), padding stripped."""
+    rng = random.Random(PROPERTY_SEED)  # noqa: S311 - seeded test data, not a secret
+    encode = base64.urlsafe_b64encode if urlsafe else base64.b64encode
+    return [
+        encode(rng.randbytes(rng.randint(24, 48))).decode().rstrip("=")
+        for _ in range(PROPERTY_KEYS)
+    ]
+
+
+@pytest.mark.parametrize("prefix", ["", "/"], ids=["bare", "leading_slash"])
+@pytest.mark.parametrize("urlsafe", [False, True], ids=["standard", "urlsafe"])
+def test_random_unpadded_keys_are_redacted_whole(urlsafe: bool, prefix: str) -> None:
+    # A leading `/` makes a key read as an absolute path, the one shape that may hold tokens.
+    keys = random_unpadded_keys(urlsafe=urlsafe)
+    assert {len(key) for key in keys} >= {32, 64}
+    assert all(32 <= len(key) <= 64 for key in keys)
+    assert [key for key in keys if redact(prefix + key) != "[token]"] == []
 
 
 @pytest.mark.parametrize(
