@@ -1,0 +1,14 @@
+# Keeps the SHA-pinned actions in .github/workflows current. Python and JS dependencies are not
+# listed: their lockfiles are audited in CI (pip-audit, pnpm audit).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # A release gets a week to be found bad before it is proposed.
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ['*']

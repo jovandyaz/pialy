@@ -9,6 +9,8 @@ on:
     types: [opened, synchronize, reopened, edited]
   push:
     branches: [main]
+  # Without it, required checks are never reported for a pull request in a merge queue.
+  merge_group:
 
 permissions:
   contents: read
@@ -43,7 +45,8 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
-          # A pull request runs the jobs whose inputs it touches; a push to main runs every job.
+          # A pull request runs the jobs whose inputs it touches; any other event (a push to main,
+          # a merge queue group) runs every job.
           if [ "$EVENT_NAME" = pull_request ]; then
             # --no-renames lists a moved file under both paths, so moving it out still counts.
             # core.quotePath=false prints non-ASCII names as they are; git still quotes names with a
@@ -84,7 +87,7 @@ jobs:
       # Same database as docker-compose.yml; the admin password is a throwaway for this runner.
       # The health check uses TCP: during init the image runs a temporary server on the socket only.
       postgres:
-        image: postgres:16
+        image: postgres:16@sha256:3950ad7c3148ca2175ef1b6c36c9efbf78957ae8fbe8b3a5d7c35af50500382f # 16.16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -142,20 +145,27 @@ jobs:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
           version: 0.13.6
-          cache-dependency-glob: tests/contract/uv.lock
+          # apps/api too: contract:audit runs the pip-audit locked there.
+          cache-dependency-glob: |
+            tests/contract/uv.lock
+            apps/api/uv.lock
       - run: pnpm install --frozen-lockfile
       # Synced here so a dependency failure shows as such, not as the fake pey never starting.
       - run: pnpm contract:sync
+      - run: pnpm contract:audit
       # The TS server is the backend in production; the Python app does not serve these routes yet.
+      # The same pytest run collects the fake pey's own tests (testpaths = ["."]).
       - name: Contract suite against the TS server
         env:
-          TMPDIR: ${{ runner.temp }}
+          RUN_DIR: ${{ runner.temp }}/contract
         run: pnpm contract:ts
       - name: Server and fake pey logs
         if: failure() || cancelled()
+        env:
+          RUN_DIR: ${{ runner.temp }}/contract
         run: |
           shopt -s nullglob
-          logs=("$RUNNER_TEMP"/tmp.*/*.log)
+          logs=("$RUN_DIR"/*.log)
           if [ "${#logs[@]}" -eq 0 ]; then
             echo "run-ts.sh left no logs: it stopped before starting the servers"
           else
@@ -170,7 +180,7 @@ jobs:
     services:
       # Same database as docker-compose.test.yml, which the apps/server tests use.
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16-alpine@sha256:1d5b02d3a9941fbd52437db4107f8c52d6297dac553ca1e5c299ebb3756b4857 # 16.16
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
