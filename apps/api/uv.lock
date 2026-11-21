@@ -12,6 +12,14 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P7D"
 
 [[package]]
+name = "agent-toolkit-audit-log"
+version = "0.1.0rc1"
+source = { git = "https://github.com/jovandyaz/agent-toolkit?subdirectory=packages%2Faudit-log&rev=v0.1.0rc1#dfbacf8c037d0481fb328f3c08fbce161b1fec81" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[[package]]
 name = "alembic"
 version = "1.20.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1103,6 +1111,7 @@ name = "pialy-api"
 version = "0.0.0"
 source = { editable = "." }
 dependencies = [
+    { name = "agent-toolkit-audit-log" },
     { name = "alembic" },
     { name = "argon2-cffi" },
     { name = "cryptography" },
@@ -1112,6 +1121,7 @@ dependencies = [
     { name = "psycopg-pool" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "sqlalchemy" },
     { name = "uvicorn" },
 ]
 
@@ -1132,6 +1142,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "agent-toolkit-audit-log", git = "https://github.com/jovandyaz/agent-toolkit?subdirectory=packages%2Faudit-log&rev=v0.1.0rc1" },
     { name = "alembic" },
     { name = "argon2-cffi" },
     { name = "cryptography" },
@@ -1142,6 +1153,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2" },
     { name = "pydantic-settings" },
     { name = "sentry-sdk", marker = "extra == 'sentry'", specifier = ">=2,<3" },
+    { name = "sqlalchemy", specifier = ">=2.1.8,<3" },
     { name = "uvicorn" },
 ]
 provides-extras = ["sentry"]

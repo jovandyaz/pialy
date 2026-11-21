@@ -13,7 +13,6 @@ from pialy.config import Settings
 from pialy.http.problems import ProblemError
 from pialy.main import create_app
 from pialy.observability.logging import bind, configure_logging
-from pialy.observability.readiness import database_readiness
 
 CSP = "default-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'"
 UNREACHABLE_DB = "postgresql://u:p@127.0.0.1:1/none"
@@ -24,9 +23,10 @@ def make_app(
     monkeypatch: pytest.MonkeyPatch,
     env: str = "test",
     readiness: Callable[[], bool] | None = None,
+    database_url: str = UNREACHABLE_DB,
 ) -> FastAPI:
     monkeypatch.setenv("ENV", env)
-    monkeypatch.setenv("DATABASE_URL", UNREACHABLE_DB)
+    monkeypatch.setenv("DATABASE_URL", database_url)
     if env == "production":
         monkeypatch.setenv("PEY_BASE_URL", "https://pey.example.invalid")
         monkeypatch.setenv("PUBLIC_ORIGIN", "https://pialy.example.invalid")
@@ -77,29 +77,36 @@ def test_readyz_is_503_when_database_is_unreachable(
     migrations_at_head: Path,
 ) -> None:
     # The migrations have a head, so only the unreachable database can make the check fail.
-    readiness = database_readiness(UNREACHABLE_DB, migrations_at_head)
+    monkeypatch.setenv("MIGRATIONS_DIR", str(migrations_at_head))
     configure_logging("INFO")
-    with TestClient(make_app(monkeypatch, readiness=readiness)) as test_client:
+    with TestClient(make_app(monkeypatch)) as test_client:
         response = test_client.get("/readyz")
     assert response.status_code == 503
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json()["status"] == 503
     [failure] = readiness_failures(capsys)
-    assert failure["message"] == "readiness check failed: OperationalError"
+    # The app's own check waits on its pool, which never gets a connection.
+    assert failure["message"] == "readiness check failed: PoolTimeout"
 
 
 def test_readyz_logs_only_the_error_type_never_the_connection_string(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], json_logs: None
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    json_logs: None,
+    migrations_at_head: Path,
 ) -> None:
-    # libpq quotes the connection string, password included, in its parse errors.
-    readiness = database_readiness("postgresql://u:dsn-marker-pw@[bad/db")
+    # libpq quotes the connection string, password included, in its parse errors. Settings
+    # refuses such a string (test_config), so the pool meets a refused connection instead; its
+    # own connection warnings land in the same output.
+    monkeypatch.setenv("MIGRATIONS_DIR", str(migrations_at_head))
     configure_logging("INFO")
-    with TestClient(make_app(monkeypatch, readiness=readiness)) as test_client:
+    app = make_app(monkeypatch, database_url="postgresql://u:dsn-marker-pw@127.0.0.1:1/none")
+    with TestClient(app) as test_client:
         assert test_client.get("/readyz").status_code == 503
     out = capsys.readouterr().out
     assert "dsn-marker-pw" not in out
     [failure] = [json.loads(line) for line in out.splitlines() if "readiness" in line]
-    assert failure["message"] == "readiness check failed: ProgrammingError"
+    assert failure["message"] == "readiness check failed: PoolTimeout"
     assert failure["level"] == "ERROR"
     assert "exc" not in failure
 

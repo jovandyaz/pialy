@@ -3,14 +3,14 @@
 from collections.abc import Callable
 from pathlib import Path
 
-import psycopg
 from alembic.script import ScriptDirectory
+
+from pialy.db.database import Database
 
 ReadinessCheck = Callable[[], bool]
 
-CONNECT_TIMEOUT_SECONDS = 2
-STATEMENT_TIMEOUT_MS = 2000
-DEFAULT_MIGRATIONS_DIR = Path(__file__).resolve().parents[3] / "migrations"
+# A probe must not hold a request thread for the pool's full wait while the database is down.
+POOL_WAIT_SECONDS = 2.0
 
 
 def migrations_head(migrations_dir: Path) -> str | None:
@@ -25,21 +25,23 @@ def is_current(current: str | None, head: str | None) -> bool:
     return current is not None and current == head
 
 
-def database_readiness(
-    database_url: str, migrations_dir: Path = DEFAULT_MIGRATIONS_DIR
-) -> ReadinessCheck:
-    """A check that connects, runs SELECT 1 and compares `alembic_version` with the head."""
+def database_readiness(database: Database, migrations_dir: Path) -> ReadinessCheck:
+    """A check that runs SELECT 1 on the pool and compares `alembic_version` with the head.
+
+    The head is the code's, read once here (it imports every revision), not on each probe.
+    So a broken migrations directory (a revision that does not import, a dangling down_revision)
+    raises here, when the app is built, on purpose: the service fails fast instead of starting
+    with a readiness check that can never pass. A missing one is no head, and never ready.
+    The check reads `alembic_version` as the service role, which needs SELECT on that table.
+    """
+    head = migrations_head(migrations_dir)
 
     def check() -> bool:
-        with psycopg.connect(
-            database_url,
-            connect_timeout=CONNECT_TIMEOUT_SECONDS,
-            options=f"-c statement_timeout={STATEMENT_TIMEOUT_MS}",
-        ) as connection:
+        with database.system(timeout=POOL_WAIT_SECONDS) as connection:
             connection.execute("SELECT 1")
             if connection.execute("SELECT to_regclass('alembic_version')").fetchone() == (None,):
                 return False
             row = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-        return is_current(row[0] if row else None, migrations_head(migrations_dir))
+        return is_current(row[0] if row else None, head)
 
     return check

@@ -4,8 +4,25 @@ Python 3.13 backend (FastAPI, psycopg, Alembic), managed with uv. Root `AGENTS.m
 
 ## Commands (from the repo root)
 - `pnpm api:sync`: install locked dependencies.
-- `pnpm api:lint`: ruff, ruff format check, `mypy --strict`, import-linter.
-- `pnpm api:test`: pytest.
+- `pnpm api:lint`: ruff, ruff format check, `mypy --strict` (`src`, `tests`, `migrations`),
+  import-linter.
+- `pnpm api:test`: pytest. Database tests need `docker compose -f docker-compose.test.yml up -d`;
+  the script points `TEST_DATABASE_URL` (an admin URL of a disposable cluster: the fixtures reset
+  the `pialy_owner`/`pialy_app` passwords) at it unless set. Without it they are skipped. They refuse
+  a non-loopback host, in the URL or in `PGHOST`/`PGHOSTADDR`, and a libpq service (`service=`,
+  `PGSERVICE`, `PGSERVICEFILE`), unless `PIALY_TEST_DB_DISPOSABLE=1` (CI jobs running in a
+  container).
+- Migrations: raw SQL Alembic revisions in `migrations/versions`, forward-only, run as the owner
+  role from `apps/api`: `MIGRATION_DATABASE_URL=... uv run alembic upgrade head`.
+- Tenant tables: `business_id` leads every key and index, unique keys hold per business, and
+  foreign keys go through `(business_id, id)`. The exceptions are deliberate, each reached before
+  the business is known: the global keys `business.slug` (public URL), `lower(users.email)`
+  (login), `invitations.token_hash` (accepting an invitation),
+  `webhook_inbox (connection_id, webhook_id)` and `pey_connections.id` (a webhook names its
+  connection, which names the business), and the index `memberships (user_id)` (login lists a
+  user's businesses). `NOT_LED_BY_BUSINESS` in `tests/db/test_schema.py` lists those of tenant
+  tables; a new exception goes there with its reason. A new tenant table joins `TENANT_TABLES` in
+  the same file, whose structural tests enforce these rules (see `0001_tables.py`).
 - `pnpm api:dev`: run the server on port 3000.
 
 ## Conventions

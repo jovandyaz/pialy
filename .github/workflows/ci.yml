@@ -102,6 +102,8 @@ jobs:
     env:
       # This job runs only uv through pnpm, so pnpm must not install the JS dependencies first.
       pnpm_config_verify_deps_before_run: 'false'
+      # Admin URL for the database tests; the runner's throwaway service below.
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pialy
     services:
       # Same database as docker-compose.yml; the admin password is a throwaway for this runner.
       # docker-compose.yml is not digest-pinned yet, so this digest is bumped by hand.

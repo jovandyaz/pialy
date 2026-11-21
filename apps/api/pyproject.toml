@@ -9,11 +9,13 @@ dependencies = [
   "psycopg[binary]",
   "psycopg_pool",
   "alembic",
+  "sqlalchemy>=2.1.8,<3",  # migrations/env.py builds Alembic's engine with it
   "pydantic>=2",
   "pydantic-settings",
   "httpx",
   "argon2-cffi",
   "cryptography",
+  "agent-toolkit-audit-log @ git+https://github.com/jovandyaz/agent-toolkit@v0.1.0rc1#subdirectory=packages/audit-log",
 ]
 
 [project.optional-dependencies]
@@ -26,12 +28,17 @@ dev = ["pytest>=8.2", "ruff", "mypy", "import-linter", "pip-audit", "httpx2>=2,<
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.metadata]
+# The agent-toolkit packages are PEP 508 git references pinned to a tag (and to a commit in uv.lock).
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/pialy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+# "." makes shared test code importable by the path mypy names it by (tests.db.support).
+pythonpath = ["src", "."]
 
 [tool.ruff]
 line-length = 100
@@ -41,6 +48,9 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "S"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["tests"]  # shared test code, imported as tests.db.support
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "S105", "S106"]
 
@@ -48,6 +58,8 @@ select = ["E", "F", "I", "UP", "B", "SIM", "S"]
 strict = true
 python_version = "3.13"
 mypy_path = "src"
+# Name test modules by path (tests.conftest, tests.db.conftest) so equal file names do not clash.
+explicit_package_bases = true
 plugins = ["pydantic.mypy"]
 
 # Supply-chain cooldown: uv ignores releases younger than 7 days, so a hijacked release is not

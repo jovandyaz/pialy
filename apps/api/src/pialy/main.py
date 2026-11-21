@@ -1,7 +1,12 @@
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from anyio import to_thread
 from fastapi import FastAPI
 
 from pialy.clock import Clock, system_clock
 from pialy.config import Settings, load_settings
+from pialy.db.database import Database
 from pialy.http.problems import install_problem_handlers
 from pialy.http.request_context import RequestContextMiddleware
 from pialy.http.routes.health import health_router
@@ -14,13 +19,30 @@ from pialy.observability.readiness import ReadinessCheck, database_readiness
 def create_app(
     settings: Settings, clock: Clock, readiness: ReadinessCheck | None = None
 ) -> FastAPI:
-    app = FastAPI(title="pialy", docs_url=None, redoc_url=None, openapi_url=None)
+    database = Database(settings)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        # Sync handlers run in AnyIO's threadpool; never more of them than pooled connections
+        # (spec §12b). The limiter belongs to the running event loop, hence here.
+        to_thread.current_default_thread_limiter().total_tokens = database.max_size
+        # A role that bypasses row-level security would serve every business (spec §5b), and a
+        # session without the time limits could hold a connection without bound (spec §12b).
+        await to_thread.run_sync(database.vet_connection)
+        database.open()
+        try:
+            yield
+        finally:
+            await to_thread.run_sync(database.close)
+
+    app = FastAPI(title="pialy", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.settings = settings
     app.state.clock = clock
+    app.state.database = database
     check = (
         readiness
         if readiness is not None
-        else database_readiness(settings.database_url.get_secret_value())
+        else database_readiness(database, settings.migrations_dir)
     )
     install_problem_handlers(app)
     app.include_router(health_router(check))

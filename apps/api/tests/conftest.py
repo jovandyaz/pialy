@@ -21,6 +21,7 @@ SETTINGS_VARS = (
     "AUDIT_HMAC_KEY",
     "SENTRY_DSN",
     "LOG_LEVEL",
+    "MIGRATIONS_DIR",
 )
 
 
