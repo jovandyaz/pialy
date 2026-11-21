@@ -258,18 +258,26 @@ class RedactingFilter(logging.Filter):
             setattr(record, _FIELDS_ATTR, {k: redact_value(v) for k, v in fields.items()})
 
 
+UNREPRESENTABLE = "[unrepresentable]"
+
+
 def redact_value(value: object) -> object:
     """Redact one value: text as is, anything else by its text, keeping its type if that is clean.
 
     A phone held in an int or a float (`5512345678`, `1234567890123456.0`) is replaced by its
     redacted text; line numbers, ratios, flags and None keep their type. Other objects (a
     `uuid.UUID`, a `Decimal`) are checked by `str()`, which is what JSON output uses for them.
+    Never raises: a value with no text (a `__str__` that raises, an int over Python's digit limit)
+    becomes a fixed placeholder, so it can neither break the caller nor reach the output.
     """
     if value is None or isinstance(value, bool):
         return value
     if isinstance(value, str):
         return redact(value)
-    text = str(value)
+    try:
+        text = str(value)
+    except Exception:  # whatever `str()` raises: the value cannot be checked, so it is dropped
+        return UNREPRESENTABLE
     redacted = redact(text)
     return value if redacted == text else redacted
 

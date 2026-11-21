@@ -80,6 +80,27 @@ def test_scrub_event_recurses_into_tuples_and_keeps_their_type() -> None:
     assert scrubbed["extra"] == ("call [digits]", ["[digits]", {"k": ("[digits]",)}], 7)
 
 
+class RaisingStr:
+    def __str__(self) -> str:
+        raise RuntimeError("no text for you")
+
+
+def test_scrub_event_never_raises_on_odd_values() -> None:
+    event: dict[str, object] = {
+        "message": f"call {PHONE}",
+        "extra": {"raising": RaisingStr(), "big": 10**5000, 10**5000: "big key"},
+        "list": [RaisingStr(), 10**5000, 3],
+    }
+    scrubbed = scrub_event(event, {})
+    assert scrubbed["message"] == "call [digits]"
+    assert scrubbed["extra"] == {
+        "raising": "[unrepresentable]",
+        "big": "[unrepresentable]",
+        "[unrepresentable]": "big key",
+    }
+    assert scrubbed["list"] == ["[unrepresentable]", "[unrepresentable]", 3]
+
+
 def test_no_dsn_does_not_import_sentry(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "sentry_sdk", None)  # an import would raise
     init_error_reporting(settings(monkeypatch))

@@ -211,6 +211,28 @@ def test_redact_value_keeps_scalars_and_redacts_the_text_of_other_objects() -> N
     assert redact_value(same) is same  # an identifier stays as it is
 
 
+class RaisingStr:
+    def __str__(self) -> str:
+        raise RuntimeError("no text for you")
+
+
+def test_redact_value_never_raises_on_odd_values() -> None:
+    assert redact_value(RaisingStr()) == "[unrepresentable]"
+    assert redact_value(10**5000) == "[unrepresentable]"  # over Python's int-to-str digit limit
+    assert redact_value(-(10**5000)) == "[unrepresentable]"
+
+
+def test_odd_event_field_values_do_not_raise_into_the_caller(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configure_logging("INFO")
+    log_event("x.happened", big=10**5000, note="kept")
+    [line] = lines(capsys)
+    assert line["message"] == "x.happened"  # not the whole-record fallback
+    assert line["big"] == "[unrepresentable]"
+    assert line["note"] == "kept"
+
+
 def test_level_filters_and_rejects_unknown(capsys: pytest.CaptureFixture[str]) -> None:
     configure_logging("warning")
     logging.getLogger("x").info("hidden")
