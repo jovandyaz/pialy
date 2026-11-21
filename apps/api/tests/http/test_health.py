@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from collections.abc import Callable, Iterator
 
@@ -10,7 +11,7 @@ from pialy.clock import system_clock
 from pialy.config import Settings
 from pialy.http.problems import ProblemError
 from pialy.main import create_app
-from pialy.observability.logging import configure_logging
+from pialy.observability.logging import bind, configure_logging
 
 CSP = "default-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'"
 UNREACHABLE_DB = "postgresql://u:p@127.0.0.1:1/none"
@@ -36,6 +37,12 @@ def make_app(
     @app.get("/boom")
     def boom() -> None:
         raise RuntimeError(f"secret internal detail {PHONE}")
+
+    @app.get("/bookings/{token}")
+    def booking(token: str) -> dict[str, str]:
+        bind(business_id="biz-1")
+        logging.getLogger("handler").info("looked up")
+        return {"ok": "yes"}
 
     @app.get("/teapot")
     def teapot() -> None:
@@ -193,3 +200,59 @@ def test_replaces_a_malformed_incoming_request_id(client: TestClient, bad: str) 
     response = client.get("/nope", headers=[(b"x-request-id", bad.encode("latin-1"))])
     assert response.headers["x-request-id"] != bad
     assert re.fullmatch(r"[0-9a-f-]{36}", response.headers["x-request-id"])
+
+
+def log_lines(capsys: pytest.CaptureFixture[str]) -> list[dict[str, str]]:
+    out = capsys.readouterr().out
+    parsed = [json.loads(line) for line in out.splitlines() if line]
+    # The test client logs its own "HTTP Request" lines; keep the app's.
+    return [line for line in parsed if line["logger"] in ("pialy.http", "handler")]
+
+
+def test_error_line_carries_request_id_route_and_bound_business(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], json_logs: None
+) -> None:
+    app = make_app(monkeypatch)
+
+    @app.get("/stores/{store}/boom")
+    def store_boom(store: str) -> None:
+        bind(business_id="biz-9")  # runs in a threadpool copy of the context
+        raise RuntimeError("nope")
+
+    configure_logging("INFO")
+    with TestClient(app, raise_server_exceptions=False) as test_client:
+        response = test_client.get("/stores/abc/boom")
+    rid = response.headers["x-request-id"]
+    error, access = log_lines(capsys)
+    assert error["level"] == "ERROR"
+    assert access["level"] == "INFO"
+    for line in (error, access):
+        assert line["request_id"] == rid
+        assert line["route"] == "/stores/{store}/boom"
+        assert line["business_id"] == "biz-9"
+    assert access["message"] == "GET /stores/{store}/boom 500"
+
+
+def test_request_line_and_handler_line_carry_route_and_request_id(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], json_logs: None
+) -> None:
+    configure_logging("INFO")
+    with TestClient(make_app(monkeypatch)) as test_client:
+        response = test_client.get("/bookings/Zx9QbW1kT2tlbl9TZWNyZXQ")
+    handler, access = log_lines(capsys)
+    for line in (handler, access):
+        assert line["route"] == "/bookings/{token}"
+        assert line["request_id"] == response.headers["x-request-id"]
+        assert line["business_id"] == "biz-1"
+    assert access["message"] == "GET /bookings/{token} 200"
+    assert "Zx9QbW1k" not in json.dumps([handler, access])
+
+
+def test_unrouted_request_logs_the_redacted_raw_path(
+    client: TestClient, capsys: pytest.CaptureFixture[str], json_logs: None
+) -> None:
+    configure_logging("INFO")
+    client.get("/api/bookings/Zx9QbW1kT2tlbl9TZWNyZXQ/nope")
+    [access] = log_lines(capsys)
+    assert access["route"] == "/api/bookings/Zx9Q…/nope"
+    assert access["message"] == "GET /api/bookings/Zx9Q…/nope 404"

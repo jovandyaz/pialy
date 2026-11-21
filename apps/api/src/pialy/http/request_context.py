@@ -13,12 +13,23 @@ from starlette.datastructures import Headers, MutableHeaders
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from pialy.http.problems import problem_response
-from pialy.observability.logging import request_id
+from pialy.observability.logging import (
+    bind_route,
+    redact,
+    request_id,
+    start_request_context,
+)
 
 REQUEST_ID_HEADER = "X-Request-Id"
 _VALID_REQUEST_ID = re.compile(r"[A-Za-z0-9-]{8,64}")
 
 logger = logging.getLogger("pialy.http")
+
+
+def route_of(scope: Scope) -> str:
+    """The route template once routed (`/api/bookings/{token}`), else the redacted raw path."""
+    path = getattr(scope.get("route"), "path", None)
+    return path if isinstance(path, str) else redact(str(scope["path"]))
 
 
 def resolve_request_id(incoming: str | None) -> str:
@@ -38,12 +49,16 @@ class RequestContextMiddleware:
 
         rid = resolve_request_id(Headers(scope=scope).get(REQUEST_ID_HEADER))
         request_id.set(rid)
+        start_request_context()
+        bind_route(lambda: route_of(scope))
         started = False
+        status = 500
 
         async def send_with_id(message: Message) -> None:
-            nonlocal started
+            nonlocal started, status
             if message["type"] == "http.response.start":
                 started = True
+                status = message["status"]
                 MutableHeaders(scope=message)[REQUEST_ID_HEADER] = rid
             await send(message)
 
@@ -54,3 +69,5 @@ class RequestContextMiddleware:
             if started:
                 raise
             await problem_response(500)(scope, receive, send_with_id)
+        finally:
+            logger.info("%s %s %d", scope["method"], route_of(scope), status)

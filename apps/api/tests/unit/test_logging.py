@@ -10,6 +10,7 @@ from pialy.observability.logging import (
     log_event,
     redact,
     request_id,
+    start_request_context,
 )
 
 PHONE = "5512345678"
@@ -17,6 +18,7 @@ EMAIL = "a@b.mx"
 TOKEN = "3f9a" * 8  # 32 hex characters
 CLABE = "123456789012345678"
 BOOKING_TOKEN = "Zx9QbW1kT2tlbl9TZWNyZXQ"
+UUID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
 
 
 @pytest.fixture(autouse=True)
@@ -106,10 +108,53 @@ def test_level_filters_and_rejects_unknown(capsys: pytest.CaptureFixture[str]) -
         configure_logging("LOUD")
 
 
-def test_uvicorn_loggers_flow_through_the_redacting_handler(
+def test_uvicorn_error_logs_flow_through_the_redacting_handler(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configure_logging("INFO")
+    logging.getLogger("uvicorn.error").error(f"failed for {PHONE}")
+    [line] = lines(capsys)
+    assert PHONE not in json.dumps(line)
+
+
+def test_uvicorn_access_lines_are_left_to_the_request_middleware(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     configure_logging("INFO")
     logging.getLogger("uvicorn.access").info(f"GET /api/bookings/{BOOKING_TOKEN} 200")
-    [line] = lines(capsys)
-    assert BOOKING_TOKEN not in json.dumps(line)
+    assert capsys.readouterr().out == ""
+
+
+def test_uuids_survive_redaction_in_text_and_event_fields(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configure_logging("INFO")
+    log_event("payment.applied", booking_id=UUID)
+    try:
+        raise ValueError(f"no booking {UUID} for {PHONE}")
+    except ValueError:
+        logging.getLogger("x").exception("failed %s", UUID.upper())
+    event, error = lines(capsys)
+    assert event["booking_id"] == UUID
+    assert error["message"] == f"failed {UUID.upper()}"
+    assert f"no booking {UUID} for [digits]" in str(error["exc"])
+
+
+def test_uuid_shape_does_not_shelter_real_tokens() -> None:
+    assert redact(f"tok x{UUID}") == "tok [token]"
+    assert redact(f"tok {UUID}-{UUID}") == "tok [token]"
+    assert redact(UUID.replace("-", "")) == "[token]"
+    assert redact("id 12345678-1234-1234-1234-123456789012") == (
+        "id 12345678-1234-1234-1234-123456789012"
+    )
+
+
+def test_business_id_is_empty_until_bound(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging("INFO")
+    start_request_context()
+    logging.getLogger("x").info("before")
+    bind(business_id="biz-1")
+    logging.getLogger("x").info("after")
+    before, after = lines(capsys)
+    assert before["business_id"] == ""
+    assert after["business_id"] == "biz-1"

@@ -9,13 +9,15 @@ import json
 import logging
 import re
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from datetime import UTC, datetime
-from types import MappingProxyType
 
 request_id: ContextVar[str] = ContextVar("request_id", default="-")
-_bound: ContextVar[Mapping[str, str]] = ContextVar("bound_log_fields", default=MappingProxyType({}))
+# One mutable dict per request: a handler running in a threadpool (copied context) binds into
+# the same object the middleware reads for its own lines.
+_bound: ContextVar[dict[str, str] | None] = ContextVar("bound_log_fields", default=None)
+_route: ContextVar[Callable[[], str] | None] = ContextVar("log_route", default=None)
 
 _EVENT_LOGGER = logging.getLogger("pialy.events")
 _EVENT_ATTR = "pialy_event"
@@ -28,23 +30,52 @@ _TOKEN_IN_PATH = re.compile(r"(/(?:api/bookings|api/verify|c|negocio/verificar)/
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{32,}")
 _DIGITS = re.compile(r"\d{10,}")
+_HEX = "[0-9a-fA-F]"
+# A canonical UUID is an identifier, not a secret: it stays readable in logs.
+_UUID = re.compile(
+    rf"(?<![A-Za-z0-9_-])({_HEX}{{8}}-{_HEX}{{4}}-{_HEX}{{4}}-{_HEX}{{4}}-{_HEX}{{12}})"
+    r"(?![A-Za-z0-9_-])"
+)
 
 
 def _shorten_token(match: re.Match[str]) -> str:
     return f"{match[1]}{match[2][:LOGGED_TOKEN_CHARS]}…"
 
 
-def redact(text: str) -> str:
-    """Hide booking tokens, emails, 32+ character tokens and runs of 10+ digits."""
-    text = _TOKEN_IN_PATH.sub(_shorten_token, text)
+def _redact_plain(text: str) -> str:
     text = _EMAIL.sub("[email]", text)
     text = _TOKEN.sub("[token]", text)
     return _DIGITS.sub("[digits]", text)
 
 
+def redact(text: str) -> str:
+    """Hide booking tokens, emails, 32+ character tokens and runs of 10+ digits.
+
+    Canonical UUIDs pass through untouched.
+    """
+    text = _TOKEN_IN_PATH.sub(_shorten_token, text)
+    parts = _UUID.split(text)  # odd items are the UUIDs
+    return "".join(part if index % 2 else _redact_plain(part) for index, part in enumerate(parts))
+
+
+def start_request_context() -> None:
+    """Begin a request: fresh bound fields, shared by reference with every copied context."""
+    _bound.set({})
+    _route.set(None)
+
+
 def bind(**fields: str) -> None:
-    """Add fields (business id, route) to every following line of the current context."""
-    _bound.set({**_bound.get(), **fields})
+    """Add fields (business id, ...) to every following line of the current request."""
+    current = _bound.get()
+    if current is None:
+        current = {}
+        _bound.set(current)
+    current.update(fields)
+
+
+def bind_route(resolver: Callable[[], str]) -> None:
+    """Resolve `route` lazily: routing happens after the request context starts."""
+    _route.set(resolver)
 
 
 def log_event(name: str, **fields: str | int) -> None:
@@ -79,14 +110,18 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         fields: Mapping[str, str | int] = getattr(record, _FIELDS_ATTR, {})
         payload: dict[str, object] = {
+            "business_id": "",  # empty until tenancy binds it; the key is on every line
             **fields,
             "ts": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
             "request_id": request_id.get(),
-            **_bound.get(),
         }
+        resolver = _route.get()
+        if resolver is not None:
+            payload["route"] = resolver()
+        payload.update(_bound.get() or {})
         event: str | None = getattr(record, _EVENT_ATTR, None)
         if event is not None:
             payload["event"] = event
@@ -111,3 +146,6 @@ def configure_logging(level: str) -> None:
     for uvicorn_logger in _UVICORN_LOGGERS:
         logging.getLogger(uvicorn_logger).handlers.clear()
         logging.getLogger(uvicorn_logger).propagate = True
+    # uvicorn logs access lines outside the request's context, so they would carry no request
+    # id or route. RequestContextMiddleware writes the access line instead.
+    logging.getLogger("uvicorn.access").propagate = False
