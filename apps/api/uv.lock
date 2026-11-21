@@ -1151,7 +1151,7 @@ dev = [
     { name = "import-linter" },
     { name = "mypy" },
     { name = "pip-audit" },
-    { name = "pytest" },
+    { name = "pytest", specifier = ">=8.2" },
     { name = "ruff" },
 ]
 
