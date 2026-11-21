@@ -100,11 +100,13 @@ ON CONFLICT (business_id, provider_event_id) WHERE kind = 'unmatched_payment' DO
 
 # The only form of a pey payment payload that payment_events.raw holds (built by Tasks 9 and 11):
 # pey's own names for the fields a PeyPaymentEvent reads, attemptId lifted out of
-# metadata.externalMetadata, and the payer's account masked to its last 4 characters. A payload
-# whose metadata is null gives a projection without the key. Values are those of pey's documented
-# webhook examples (packages/connector-pey/test/fixtures), which are synthetic; attemptId is a
-# Pialy attempt id, a UUID.
+# metadata.externalMetadata, and the payer's account masked to its last 4 characters. datePaid
+# is not among them: it goes to the paid_at column as a timestamp. A payload whose metadata is
+# null gives a projection without the key. Values are those of pey's documented webhook examples
+# (packages/connector-pey/test/fixtures), which are synthetic; attemptId is a Pialy attempt id,
+# a UUID.
 ATTEMPT_ID = "6f1c2a3b-0d4e-4f5a-8b6c-7d8e9f0a1b2c"
+DATE_PAID = 1790724818  # the QR fixture's datePaid, Unix seconds: 2026-09-29
 SANITIZED_METADATA = {
     "clabe": MASKED_CLABE,
     "bankCode": 40012,
@@ -114,18 +116,17 @@ SANITIZED_METADATA = {
 SANITIZED_PUSH = {
     "transactionId": "01M3QR5E7XHXMNZDEPFH3JAWS0",
     "amount": 0.01,
-    "datePaid": 1790724758,
     "metadata": SANITIZED_METADATA,
 }
 SANITIZED_QR = {
     "transactionId": "01M3QR8H0RH0XBCKYYD242YXNV",
     "codiQrId": "35a13c183a",
     "amount": 150,
-    "datePaid": 1790724818,
     "metadata": SANITIZED_METADATA,
 }
 # What pey sends that the projection leaves out (synthetic values).
 PEY_BODY = SANITIZED_QR | {
+    "datePaid": DATE_PAID,
     "type": "codi.qr.payment_received",
     "apiKeyId": "01M3QMMR6X9CBVDY1SF3G8QWNW",
     "bankAccountId": "01JBAVWE4NS5TGXHWGMX3KH23Q",
@@ -902,8 +903,7 @@ def test_bookings_are_found_by_their_intent(owner_db: Database) -> None:
         with_metadata(trackingKey="A" * 30),
         with_metadata(trackingKey="12345678901234"),
         with_metadata(trackingKey="TRACK1234567890123456"),
-        SANITIZED_QR | {"amount": 9_999_999.99, "datePaid": 1_577_836_800},
-        SANITIZED_QR | {"datePaid": 1_999_999_999},
+        SANITIZED_QR | {"amount": 9_999_999.99},
         SANITIZED_QR
         | {"transactionId": "txn_2026-AbCdEf0123456789", "codiQrId": "qr_0A1b2C3d4E5f"},
         SANITIZED_QR | {"transactionId": "T" * 64, "codiQrId": "Q" * 64},
@@ -922,8 +922,7 @@ def test_bookings_are_found_by_their_intent(owner_db: Database) -> None:
         "longest-tracking-key",
         "longest-digits-only-tracking-key",
         "tracking-key-with-letters-and-a-digit-run",
-        "largest-amount-first-second-of-2020",
-        "last-second-below-the-smallest-phone",
+        "largest-amount",
         "new-format-ids",
         "longest-ids",
         "shortest-ids",
@@ -970,13 +969,89 @@ def test_payment_events_reject_fields_outside_the_projection(
         add_event(conn, business.id, raw=Jsonb(raw))
 
 
+# datePaid left the projection for the paid_at column, so raw refuses it whatever it holds: pey's
+# own value as much as a phone, a CLABE or milliseconds written in its place.
+DATE_PAID_IN_RAW: list[tuple[str, object]] = [
+    ("fixture", DATE_PAID),
+    ("first-second-of-2020", 1_577_836_800),
+    ("after-2033-05-18", 2_000_000_000),
+    ("string", str(DATE_PAID)),
+    ("fraction", DATE_PAID + 0.5),
+    ("milliseconds", DATE_PAID * 1000),
+    ("phone", int(PHONE)),
+    ("phone-33", int(OTHER_PHONE)),
+    ("clabe", int(CLABE)),
+    ("null", None),
+]
+
+
+@pytest.mark.parametrize(
+    "date_paid",
+    [value for _, value in DATE_PAID_IN_RAW],
+    ids=[name for name, _ in DATE_PAID_IN_RAW],
+)
+def test_payment_events_refuse_date_paid_in_raw(owner_db: Database, date_paid: object) -> None:
+    business = create_business(owner_db)
+    with (
+        violates(errors.CheckViolation, "payment_events_raw_check"),
+        owner_db.tenant(context(business.id)) as conn,
+    ):
+        add_event(conn, business.id, raw=Jsonb(SANITIZED_QR | {"datePaid": date_paid}))
+
+
+# paid_at is pey's datePaid parsed to a timestamp: typed, so it holds no phone, and bounded to a
+# plausible payment time, with no limit in 2033 any more. The test cluster runs in UTC, the
+# TimeZone the CHECK's bounds were read in when 0001 ran.
+@pytest.mark.parametrize(
+    "paid_at",
+    [
+        datetime.fromtimestamp(DATE_PAID, UTC),
+        datetime(2020, 1, 1, tzinfo=UTC),
+        datetime.fromtimestamp(2_000_000_000, UTC),
+        datetime(2099, 12, 31, 23, 59, 59, 999999, tzinfo=UTC),
+        None,
+    ],
+    ids=["fixture", "first-instant", "after-2033-05-18", "last-instant", "null"],
+)
+def test_payment_events_accept_a_paid_at_in_range(
+    owner_db: Database, paid_at: datetime | None
+) -> None:
+    business = create_business(owner_db)
+    with owner_db.tenant(context(business.id)) as conn:
+        event_id = add_event(conn, business.id, paid_at=paid_at)
+        row = conn.execute(
+            "SELECT paid_at FROM payment_events WHERE id = %s", (event_id,)
+        ).fetchone()
+    assert row == (paid_at,)
+
+
+@pytest.mark.parametrize(
+    "paid_at",
+    [
+        datetime(2019, 12, 31, 23, 59, 59, 999999, tzinfo=UTC),
+        datetime(2100, 1, 1, tzinfo=UTC),
+        datetime(1970, 1, 1, tzinfo=UTC),
+        datetime.fromtimestamp(int(PHONE), UTC),
+    ],
+    ids=["before-2020", "2100", "epoch", "phone-as-seconds"],
+)
+def test_payment_events_refuse_a_paid_at_out_of_range(
+    owner_db: Database, paid_at: datetime
+) -> None:
+    business = create_business(owner_db)
+    with (
+        violates(errors.CheckViolation, "payment_events_paid_at_check"),
+        owner_db.tenant(context(business.id)) as conn,
+    ):
+        add_event(conn, business.id, paid_at=paid_at)
+
+
 # Each field of the projection keeps its documented type and shape, so an allowed key cannot
 # carry a phone, a CLABE or anything else. pey's ids are opaque strings: any format is taken but
 # digits alone, the shape of a phone or a CLABE. A tracking key may be digits alone, as the
 # fixture's is, but not 15 or more of them: the length of a CLABE (18) or a card (15 to 19).
-# amount (pesos) and datePaid (Unix seconds) stay within plausible bounds, below the size of a
-# phone or a CLABE written as a number: a Mexican 10-digit number starts with 2 to 9, so
-# datePaid stays below 2_000_000_000.
+# amount (pesos) stays within plausible bounds, below the size of a phone or a CLABE written as a
+# number.
 MALFORMED_FIELDS: list[tuple[str, dict[str, object]]] = [
     ("clabe-in-bank-code", with_metadata(bankCode=CLABE)),
     ("clabe-number-in-bank-code", with_metadata(bankCode=int(CLABE))),
@@ -1003,15 +1078,6 @@ MALFORMED_FIELDS: list[tuple[str, dict[str, object]]] = [
     ("amount-ten-million", SANITIZED_QR | {"amount": 10_000_000}),
     ("amount-phone", SANITIZED_QR | {"amount": int(PHONE)}),
     ("amount-clabe", SANITIZED_QR | {"amount": int(CLABE)}),
-    ("date-paid-string", SANITIZED_QR | {"datePaid": "1790724818"}),
-    ("date-paid-fraction", SANITIZED_QR | {"datePaid": 1790724818.5}),
-    ("date-paid-before-2020", SANITIZED_QR | {"datePaid": 1_577_836_799}),
-    ("date-paid-2100", SANITIZED_QR | {"datePaid": 4_102_444_800}),
-    ("date-paid-smallest-phone", SANITIZED_QR | {"datePaid": 2_000_000_000}),
-    ("date-paid-phone-33", SANITIZED_QR | {"datePaid": int(OTHER_PHONE)}),
-    ("date-paid-milliseconds", SANITIZED_QR | {"datePaid": 1_790_724_818_000}),
-    ("date-paid-phone", SANITIZED_QR | {"datePaid": int(PHONE)}),
-    ("date-paid-clabe", SANITIZED_QR | {"datePaid": int(CLABE)}),
     ("tracking-key-boolean", with_metadata(trackingKey=True)),
     ("tracking-key-number", with_metadata(trackingKey=192191042)),
     ("tracking-key-spaces", with_metadata(trackingKey="0192 191042")),

@@ -15,7 +15,7 @@ Rules the tables follow (tests/db/test_schema.py checks each one):
 - Personal data is stored as hashes and last digits only: the phone as an HMAC-SHA256 hex digest
   and its last 4 digits, session and invitation tokens as SHA-256 digests. Of pey's payment
   payload only an allowlisted projection is kept, each field of its documented type and shape,
-  the payer's account masked to its last 4 characters.
+  the payer's account masked to its last 4 characters, and the payment time as a timestamp.
 - Text columns are `text` with a CHECK, never `char(n)` (wiki.postgresql.org, "Don't Do This").
 - Constraints are NOT DEFERRABLE (the default), as `INSERT ... ON CONFLICT` arbiters must be.
 
@@ -46,12 +46,6 @@ DIGITS_ONLY = r"^[0-9]+$"
 # amount: pesos as pey sends them, to the centavo, under 10 million: far above any CoDi payment
 # and below a 10-digit phone written as a number.
 AMOUNT_BELOW = 10_000_000
-# datePaid: integer Unix seconds (pey's fixtures: 1790724818 is 2026-09-29), from 2020-01-01 up
-# to 2_000_000_000 (2033-05-18). Every Mexican 10-digit number starts with 2 to 9, so a phone
-# written as a number (3312345678 as much as 5512345678) falls out, as do milliseconds and a
-# CLABE. Payments from 2033-05-18 on need a revision that raises the bound.
-DATE_PAID_FROM = 1_577_836_800
-DATE_PAID_BELOW = 2_000_000_000
 # metadata.bankCode: the payer's bank, by its 3-digit code (as in a CLABE) or 5-digit SPEI one.
 BANK_CODE = r"^[0-9]{3,5}$"
 # metadata.trackingKey: the SPEI clave de rastreo, up to 30 alphanumeric characters
@@ -77,7 +71,7 @@ def member(
     return f"CASE WHEN jsonb_typeof({value}) IN ({kinds}) THEN {matches} ELSE {value} IS NULL END"
 
 
-def number(key: str, least: Decimal | int, below: int, places: int) -> str:
+def number(key: str, least: Decimal, below: int, places: int) -> str:
     """SQL that holds when raw has no key, or a number from least up to (not including) below,
     with at most places decimals. CASE keeps the cast, which raises on a non-number, guarded."""
     value = f"(raw -> '{key}')::numeric"
@@ -266,6 +260,13 @@ STATEMENTS = (
                 tracking_key IS NULL
                 OR (tracking_key ~ '{TRACKING_KEY}' AND tracking_key !~ '{ACCOUNT_NUMBER}')
             ),
+        -- When pey says the payment was made: its datePaid (Unix seconds), which Task 11 parses
+        -- into this typed timestamp. A timestamp cannot carry a phone the way the bare number
+        -- could, so datePaid stays out of raw.
+        paid_at           timestamptz
+            CONSTRAINT payment_events_paid_at_check CHECK (
+                paid_at IS NULL OR (paid_at >= '2020-01-01' AND paid_at < '2100-01-01')
+            ),
         late              boolean     NOT NULL DEFAULT false,
         raw               jsonb       NOT NULL,
         created_at        timestamptz NOT NULL DEFAULT now(),
@@ -278,26 +279,24 @@ STATEMENTS = (
         CONSTRAINT payment_events_clabe_check
             CHECK (raw #>> '{{metadata,clabe}}' ~ '^\**.{{0,4}}$'),
         -- raw is a projection of pey's payload, never the body as received: the fields a
-        -- PeyPaymentEvent reads, under pey's names (attemptId lifted out of externalMetadata).
-        -- This CHECK is a backstop, not the filter: it refuses a field of another type or shape,
-        -- which could carry a phone or a CLABE, by failing the whole insert. So Task 11's
-        -- projection must fit every field to its shape or drop it, and the payment row always
-        -- lands. A field pey sends as null (metadata may be) is left out. amount stays as pey
-        -- sends it, pesos with up to 2 decimals; amount_minor is the value pialy uses. CASE
-        -- orders the tests, as deleting keys from a non-object and casting a non-number raise
-        -- instead of returning false.
+        -- PeyPaymentEvent reads, under pey's names (attemptId lifted out of externalMetadata),
+        -- but datePaid, which goes to paid_at. This CHECK is a backstop, not the filter: it
+        -- refuses a field of another type or shape, which could carry a phone or a CLABE, by
+        -- failing the whole insert. So Task 11's projection must fit every field to its shape
+        -- or drop it, and the payment row always lands. A field pey sends as null (metadata
+        -- may be) is left out. amount stays as pey sends it, pesos with up to 2 decimals;
+        -- amount_minor is the value pialy uses. CASE orders the tests, as deleting keys from a
+        -- non-object and casting a non-number raise instead of returning false.
         CONSTRAINT payment_events_raw_check CHECK (
             CASE
                 WHEN jsonb_typeof(raw) <> 'object'
                     OR jsonb_typeof(coalesce(raw -> 'metadata', '{{}}')) <> 'object' THEN false
-                ELSE (raw - ARRAY['transactionId', 'codiQrId', 'amount', 'datePaid', 'metadata'])
-                        = '{{}}'
+                ELSE (raw - ARRAY['transactionId', 'codiQrId', 'amount', 'metadata']) = '{{}}'
                     AND (coalesce(raw -> 'metadata', '{{}}')
                         - ARRAY['clabe', 'bankCode', 'trackingKey', 'attemptId']) = '{{}}'
                     AND {member("transactionId", ("string",), PROVIDER_ID, DIGITS_ONLY)}
                     AND {member("codiQrId", ("string",), PROVIDER_ID, DIGITS_ONLY)}
                     AND {number("amount", Decimal("0.01"), AMOUNT_BELOW, 2)}
-                    AND {number("datePaid", DATE_PAID_FROM, DATE_PAID_BELOW, 0)}
                     AND {member("metadata,clabe", ("string",))}
                     AND {member("metadata,bankCode", ("string", "number"), BANK_CODE)}
                     AND {member("metadata,trackingKey", ("string",), TRACKING_KEY, ACCOUNT_NUMBER)}
