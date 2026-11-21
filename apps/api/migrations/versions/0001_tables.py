@@ -359,6 +359,10 @@ STATEMENTS = (
         key            text        NOT NULL,
         request_hash   text        NOT NULL,
         response_code  integer,
+        -- Free jsonb with no CHECK: a rule on digit runs would refuse UUIDs and epoch
+        -- milliseconds too. Its writers (Tasks 12 and 17) build it from server data, never echo
+        -- customer or provider free text, and mask trackingKey and CLABE. The one provider value
+        -- kept is a QR attempt's CoDi qrString, made before any payer exists (Task 12).
         response_body  jsonb,
         recovery_point text,
         locked_at      timestamptz,
@@ -374,6 +378,10 @@ STATEMENTS = (
         id           uuid        NOT NULL DEFAULT gen_random_uuid(),
         seq          bigint      GENERATED ALWAYS AS IDENTITY,
         topic        text        NOT NULL,
+        -- Free jsonb with no CHECK: a rule on digit runs would refuse UUIDs and epoch
+        -- milliseconds too. Its writers (Task 11's enqueue and the tasks that call it) build it
+        -- from server data, never echo customer or provider free text, and mask trackingKey
+        -- and CLABE.
         payload      jsonb       NOT NULL,
         created_at   timestamptz NOT NULL DEFAULT now(),
         published_at timestamptz,
@@ -394,6 +402,9 @@ STATEMENTS = (
                 CHECK (kind IN ('unmatched_payment', 'refund_due', 'amount_mismatch')),
         booking_id        uuid,
         provider_event_id text,
+        -- Free jsonb with no CHECK: a rule on digit runs would refuse UUIDs and epoch
+        -- milliseconds too. Its writer (Task 11's apply_payment) builds it from server data,
+        -- never echoes customer or provider free text, and masks trackingKey and CLABE.
         payload           jsonb       NOT NULL,
         note              text,
         resolved_at       timestamptz,
