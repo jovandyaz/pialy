@@ -58,9 +58,9 @@ def _problem_error(_request: Request, exc: Exception) -> JSONResponse:
 
 def _http_error(_request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, StarletteHTTPException)  # noqa: S101 - registered for this type only
-    # Starlette's own details ("Not Found", "Method Not Allowed") repeat the title.
-    detail = None if exc.detail == _phrase(exc.status_code) else exc.detail
-    return problem_response(exc.status_code, detail=detail, headers=dict(exc.headers or {}))
+    # The status title only: `detail` is free text from any code that raises it, and may carry
+    # input or internals. A route that needs a detail raises ProblemError instead.
+    return problem_response(exc.status_code, headers=dict(exc.headers or {}))
 
 
 def _validation_error(_request: Request, exc: Exception) -> JSONResponse:

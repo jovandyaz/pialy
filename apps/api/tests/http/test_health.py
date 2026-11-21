@@ -5,7 +5,7 @@ from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 
 from pialy.clock import system_clock
@@ -174,6 +174,26 @@ def test_problem_error_renders_its_fields(client: TestClient) -> None:
         "detail": "short and stout",
         "requestId": response.headers["x-request-id"],
     }
+
+
+def test_http_exception_detail_never_reaches_the_problem(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = make_app(monkeypatch)
+
+    @app.get("/raises-http")
+    def raises_http() -> None:
+        raise HTTPException(409, detail=f"slot held for {PHONE}", headers={"Retry-After": "5"})
+
+    with TestClient(app) as test_client:
+        response = test_client.get("/raises-http")
+    assert response.status_code == 409
+    assert response.headers["retry-after"] == "5"
+    assert response.json() == {
+        "type": "about:blank",
+        "title": "Conflict",
+        "status": 409,
+        "requestId": response.headers["x-request-id"],
+    }
+    assert PHONE not in response.text
 
 
 def test_method_not_allowed_is_a_problem(client: TestClient) -> None:
