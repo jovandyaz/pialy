@@ -10,17 +10,21 @@ Online-migration limits, set before any revision runs:
 """
 
 import os
-from logging.config import fileConfig
 
 import psycopg
 from alembic import context
 from psycopg.rows import TupleRow
 from sqlalchemy import create_engine, pool
 
+from pialy.observability.logging import configure_logging
+
 config = context.config
 
+# The alembic CLI (it reads alembic.ini) logs through pialy's redacting JSON handler, as the app
+# does: Alembic logs each revision's docstring. A caller that builds its own Config without the
+# file, such as the db test fixtures, keeps the logging it has.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    configure_logging("INFO")
 
 
 def _conninfo() -> str:

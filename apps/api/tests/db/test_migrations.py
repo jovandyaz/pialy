@@ -1,9 +1,14 @@
 """migrations/env.py and /readyz against real databases (the app served as pialy_app)."""
 
+import json
+import os
 import shutil
+import subprocess
+import sys
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from pathlib import Path
+from typing import Protocol
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,6 +18,15 @@ from pialy.config import Settings
 from pialy.main import create_app
 
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
+PHONE = "5512345678"
+
+
+class OwnedDatabase(Protocol):
+    @property
+    def owner_url(self) -> str: ...
+
+
+type DatabaseFactory = Callable[[Path], AbstractContextManager[OwnedDatabase]]
 
 
 # Fails the migration unless env.py set the limits for online migrations.
@@ -92,3 +106,29 @@ def test_migrations_run_with_lock_and_statement_timeouts(
     add_revision(migrations, "r0001", None, ASSERT_MIGRATION_LIMITS)
     with app_database_at(migrations):
         pass  # the upgrade raised inside the factory if the limits were missing
+
+
+def test_the_alembic_cli_logs_redacted_json(database_at: DatabaseFactory, tmp_path: Path) -> None:
+    # `alembic upgrade head` as a deploy runs it: the real alembic.ini and env.py, from the
+    # directory that holds them. Alembic logs each revision's docstring as it runs it.
+    shutil.copy(MIGRATIONS_DIR.parent / "alembic.ini", tmp_path / "alembic.ini")
+    migrations = migrations_with(tmp_path / "migrations", [])
+    with database_at(migrations) as database:
+        migrations.joinpath("versions", "r0001_test.py").write_text(
+            f'"""Call {PHONE} back."""\n\nrevision = "r0001"\ndown_revision = None\n'
+            "branch_labels = None\ndepends_on = None\n\n\ndef upgrade() -> None:\n    pass\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head"],
+            cwd=tmp_path,
+            env={**os.environ, "MIGRATION_DATABASE_URL": database.owner_url},
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=60,
+        )
+    assert PHONE not in result.stdout + result.stderr
+    lines = [json.loads(line) for line in result.stdout.splitlines()]
+    [upgrade] = [line for line in lines if line["message"].startswith("Running upgrade")]
+    assert upgrade["logger"] == "alembic.runtime.migration"
+    assert upgrade["level"] == "INFO"
