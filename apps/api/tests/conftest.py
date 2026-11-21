@@ -3,6 +3,8 @@ from collections.abc import Iterator
 
 import pytest
 
+from pialy.config import Settings
+
 SETTINGS_VARS = (
     "ENV",
     "PORT",
@@ -23,9 +25,15 @@ SETTINGS_VARS = (
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Start every test without any settings variable from the host environment."""
+    """Start every test without any settings variable from the host environment or a `.env`.
+
+    `Settings` reads `.env` from the working directory, which is apps/api under `pnpm api:test`:
+    a developer's filled-in file would otherwise satisfy the missing-variable tests. A test that
+    wants a dotenv file passes `_env_file` explicitly.
+    """
     for name in SETTINGS_VARS:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setitem(Settings.model_config, "env_file", None)
     yield
 
 

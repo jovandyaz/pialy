@@ -199,3 +199,15 @@ def test_env_example_leaves_every_secret_unset(monkeypatch: pytest.MonkeyPatch, 
         Settings(_env_file=example)
     failing = {str(issue["loc"][0]).upper() for issue in exc.value.errors()}
     assert failing == set(SECRETS_ENV)
+
+
+def test_a_stray_env_file_in_the_cwd_is_ignored_in_tests(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # A developer's filled-in apps/api/.env must not satisfy the missing-variable tests.
+    env = {"ENV": "development", "DATABASE_URL": DATABASE_URL, **SECRETS_ENV}
+    (tmp_path / ".env").write_text("".join(f"{name}={value}\n" for name, value in env.items()))
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        load_settings()
+    assert "DATABASE_URL" in failure_text(exc)
