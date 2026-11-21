@@ -15,7 +15,8 @@ Rules the tables follow (tests/db/test_schema.py checks each one):
 - Personal data is stored as hashes and last digits only: the phone as an HMAC-SHA256 hex digest
   and its last 4 digits, session and invitation tokens as SHA-256 digests. Of pey's payment
   payload only an allowlisted projection is kept, each field of its documented type and shape,
-  the payer's account masked to its last 4 characters, and the payment time as a timestamp.
+  the payer's account masked to its last 4 characters, and the payment time as a timestamp. A
+  customer name holds fewer than 8 digits, so no phone or account number.
 - Text columns are `text` with a CHECK, never `char(n)` (wiki.postgresql.org, "Don't Do This").
 - Constraints are NOT DEFERRABLE (the default), as `INSERT ... ON CONFLICT` arbiters must be.
 
@@ -205,7 +206,14 @@ STATEMENTS = (
         status          text        NOT NULL DEFAULT 'holding'
             CONSTRAINT bookings_status_check
                 CHECK (status IN ('holding', 'confirmed', 'checked_in', 'expired', 'canceled')),
-        customer_name   text,
+        -- Free text the customer types (or the agent, for them), so it may hold no phone or
+        -- account number: fewer than 8 digits in all, separated or not, the rule the agent's
+        -- name validation applies.
+        customer_name   text
+            CONSTRAINT bookings_customer_name_check CHECK (
+                customer_name IS NULL
+                OR length(regexp_replace(customer_name, '[^0-9]', '', 'g')) < 8
+            ),
         phone_last4     text        NOT NULL
             CONSTRAINT bookings_phone_last4_check CHECK (phone_last4 ~ '^[0-9]{4}$'),
         phone_hash      text        NOT NULL

@@ -1359,6 +1359,36 @@ def test_bookings_store_a_phone_hash_and_last_four_digits_only(
         )
 
 
+# customer_name is free text the customer (or the agent, for them) types, so it holds fewer than 8
+# digits in all, separated or not: the agent's name rule. A phone or an account number written
+# into it is refused.
+@pytest.mark.parametrize(
+    "name",
+    [f"Ana {PHONE}", "Ana 55-1234-5678", "Ana 1234 5678", f"Ana {CLABE}"],
+    ids=["phone", "phone-with-dashes", "eight-digits-spaced", "clabe"],
+)
+def test_bookings_refuse_a_phone_or_account_number_in_the_customer_name(
+    owner_db: Database, name: str
+) -> None:
+    business = create_business(owner_db)
+    with (
+        violates(errors.CheckViolation, "bookings_customer_name_check"),
+        owner_db.tenant(context(business.id)) as conn,
+    ):
+        add_booking(conn, business.id, business.resource_id, T0, customer_name=name)
+
+
+@pytest.mark.parametrize(
+    "name", ["Ana Mesa 2", "Ana 1234567", None], ids=["name-and-table", "seven-digits", "null"]
+)
+def test_bookings_accept_a_customer_name_of_fewer_than_eight_digits(
+    owner_db: Database, name: str | None
+) -> None:
+    business = create_business(owner_db)
+    with owner_db.tenant(context(business.id)) as conn:
+        add_booking(conn, business.id, business.resource_id, T0, customer_name=name)
+
+
 def test_session_and_invitation_tokens_are_stored_as_sha256_hashes(owner_db: Database) -> None:
     business = create_business(owner_db)
     raw_token = secrets.token_urlsafe(32).encode()
