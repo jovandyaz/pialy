@@ -3,7 +3,7 @@
 import importlib
 
 from pialy.config import Settings
-from pialy.observability.logging import redact
+from pialy.observability.logging import redact_value
 
 
 def _scrub(value: object) -> object:
@@ -12,21 +12,13 @@ def _scrub(value: object) -> object:
     A number is replaced only when redaction changes its text, so line numbers and flags keep
     their type. Keys that redact to the same text merge: the entry is gone either way.
     """
-    if isinstance(value, str):
-        return redact(value)
-    if isinstance(value, bool):  # a bool is an int: leave flags alone
-        return value
-    if isinstance(value, int | float):
-        text = str(value)
-        redacted = redact(text)
-        return value if redacted == text else redacted
     if isinstance(value, dict):
         return {_scrub(key): _scrub(item) for key, item in value.items()}
     if isinstance(value, list):
         return [_scrub(item) for item in value]
     if isinstance(value, tuple):
         return tuple(_scrub(item) for item in value)
-    return value
+    return redact_value(value)
 
 
 def scrub_event(event: dict[str, object], hint: object) -> dict[str, object]:

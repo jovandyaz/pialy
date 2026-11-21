@@ -1,6 +1,7 @@
 import json
 import logging
 import time
+import uuid
 from collections.abc import Iterator
 
 import pytest
@@ -11,6 +12,7 @@ from pialy.observability.logging import (
     configure_logging,
     log_event,
     redact,
+    redact_value,
     request_id,
     start_request_context,
 )
@@ -163,6 +165,50 @@ def test_a_bound_route_override_is_redacted_too(
     logging.getLogger("x").info("hello")
     [line] = lines(capsys)
     assert line["route"] == "/api/slots?phone=[digits]"
+
+
+def test_numeric_event_fields_are_redacted_too(capsys: pytest.CaptureFixture[str]) -> None:
+    configure_logging("INFO")
+    log_event(
+        "x.happened",
+        phone=int(PHONE),
+        account=int(CLABE),
+        big_float=1234567890123456.0,
+        phone_float=float(PHONE),
+        count=7,
+        ratio=0.5,
+        flag=True,
+        nothing=None,
+    )
+    [line] = lines(capsys)
+    assert line["phone"] == "[digits]"
+    assert line["account"] == "[digits]"
+    assert line["big_float"] == "[digits]"  # a 17-digit chain, ".0" included
+    assert line["phone_float"] == "[digits].0"
+    assert line["count"] == 7
+    assert line["ratio"] == 0.5
+    assert line["flag"] is True
+    assert line["nothing"] is None
+    assert PHONE not in json.dumps(line)
+    assert "1234567890123456" not in json.dumps(line)
+
+
+def test_redact_value_keeps_scalars_and_redacts_the_text_of_other_objects() -> None:
+    class Holder:
+        def __str__(self) -> str:
+            return f"mail {EMAIL}"
+
+    assert redact_value(int(PHONE)) == "[digits]"
+    assert redact_value(1234567890123456.0) == "[digits]"
+    assert redact_value(float(PHONE)) == "[digits].0"
+    assert redact_value(7) == 7
+    assert redact_value(0.5) == 0.5
+    assert redact_value(True) is True
+    assert redact_value(None) is None
+    assert redact_value(f"call {PHONE}") == "call [digits]"
+    assert redact_value(Holder()) == "mail [email]"  # json would stringify it with default=str
+    same = uuid.UUID(UUID)
+    assert redact_value(same) is same  # an identifier stays as it is
 
 
 def test_level_filters_and_rejects_unknown(capsys: pytest.CaptureFixture[str]) -> None:
@@ -355,11 +401,32 @@ def test_account_and_card_numbers_with_any_common_separator_are_redacted(account
         "52 5512 3456 78",
         "+521 5512 3456 78",
         "+52-5512-345678",
+        "+52 1 5512 3456 78",  # country code, legacy mobile 1 as its own group, then 4-4-2
+        "52 1 5512 3456 78",
+        "+52-1-5512-3456-78",
+        "+52 1 5512-345678",
+        "+52 1 55 12345678",
+        "+52 1 5512\xa03456\xa078",
     ],
 )
 def test_ten_digit_phones_in_other_groupings_are_redacted(phone: str) -> None:
     assert redact(f"call {phone} now") == "call [digits] now"
     assert redact(f"{phone}, then") == "[digits], then"
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("1234-56-78 1234-56-78", "[digits]"),  # not dates: month 56
+        ("2026-13-45 2026-13-45", "[digits]"),
+        ("pairs 2026-11-15 2026-13-45 end", "pairs [digits] end"),  # one invalid date
+        ("x 2026-00-10, 2026-11-00 y", "x [digits] y"),
+        ("2026-11-15, 2026-11-16", "2026-11-15, 2026-11-16"),  # valid dates stay readable
+        ("2026-12-31 2027-01-01 2027-02-28", "2026-12-31 2027-01-01 2027-02-28"),
+    ],
+)
+def test_the_date_exemption_only_covers_valid_dates(text: str, expected: str) -> None:
+    assert redact(text) == expected
 
 
 def test_spaced_account_next_to_a_phone_redacts_both() -> None:
@@ -442,6 +509,8 @@ ADVERSARIAL_INPUTS = {
     "many_ten_digit_chains": "5512 3456 78 x " * 6_600,
     "many_prefixed_chains": "+52 5512 3456 78 x " * 5_200,
     "many_five_group_chains": "12 34 56 78 90 x " * 5_800,
+    "many_legacy_prefix_chains": "+52 1 5512 3456 78 x " * 4_700,
+    "many_invalid_date_pairs": "1234-56-78 1234-56-78 x " * 4_300,
     "many_date_shaped_chains": "2026-11-21 01 x " * 6_600,
     "date_chain": "2026-11-15 " * 9_000,
     "date_chain_with_tail": "2026-11-15 " * 9_000 + "1",

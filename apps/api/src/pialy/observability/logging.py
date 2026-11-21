@@ -54,8 +54,11 @@ _PHONE = re.compile(
 # card) a run is redacted whole, however long, so a number glued to an account cannot shelter part
 # of it. Runs made only of ISO dates are exempt.
 _CHAIN_SEP = r"[\s.,/_-]{1,3}"
+_MONTH = r"(?:0[1-9]|1[0-2])"
+_DAY = r"(?:0[1-9]|[12]\d|3[01])"
+_ISO_DATE = rf"\d{{4}}-{_MONTH}-{_DAY}"  # months and days are checked: `1234-56-78` is no date
 _DIGIT_CHAIN = re.compile(rf"(?<!\d)\+?\d+(?:{_CHAIN_SEP}\d+)*")
-_DATES_ONLY = re.compile(rf"\d{{4}}-\d{{2}}-\d{{2}}(?:{_CHAIN_SEP}\d{{4}}-\d{{2}}-\d{{2}})+")
+_DATES_ONLY = re.compile(rf"{_ISO_DATE}(?:{_CHAIN_SEP}{_ISO_DATE})+")
 MIN_ACCOUNT_DIGITS = 15
 # A chain of exactly 10 digits is also redacted when it looks like a phone in a grouping `_PHONE`
 # does not know (`5512 3456 78`, `5512-345678`, `+52 5512 3456 78`): 2 to 4 groups of 2 or more
@@ -69,8 +72,6 @@ COUNTRY_CODE_GROUPS = ("52", "521")
 _DIGIT_GROUP = re.compile(r"\d+")
 _NON_DIGITS = re.compile(r"\D+")
 _PHONE_SEPARATOR = re.compile(r"[\s.-]{1,3}")
-_MONTH = r"(?:0[1-9]|1[0-2])"
-_DAY = r"(?:0[1-9]|[12]\d|3[01])"
 _DATE_SHAPE = re.compile(
     rf"(?<!\d)(?:\d{{4}}[\s.-]{_MONTH}[\s.-]{_DAY}|{_DAY}[\s.-]{_MONTH}[\s.-]\d{{4}})(?!\d)"
 )
@@ -86,21 +87,38 @@ def _shorten_token(match: re.Match[str]) -> str:
     return f"{match[1]}{match[2][:LOGGED_TOKEN_CHARS]}…"
 
 
-def _looks_like_phone(chain: str) -> bool:
-    body = chain.lstrip("+")
-    groups = _DIGIT_GROUP.findall(body)
-    separators = _NON_DIGITS.findall(body)  # one between each two groups
-    offset = 0
-    if len(groups) > 2 and groups[0] in COUNTRY_CODE_GROUPS:
-        offset = len(groups[0]) + len(separators[0])
-        groups, separators = groups[1:], separators[1:]
+def _is_phone_grouping(groups: list[str], separators: list[str], tail: str) -> bool:
     return (
         sum(map(len, groups)) == PHONE_DIGITS
         and 2 <= len(groups) <= 4
         and min(map(len, groups)) >= 2
         and all(_PHONE_SEPARATOR.fullmatch(separator) for separator in separators)
         and not (set(separators) == {"."} and len(groups) != 3)  # IPv4 or a decimal
-        and not _DATE_SHAPE.search(body, offset)
+        and not _DATE_SHAPE.search(tail)
+    )
+
+
+def _looks_like_phone(chain: str) -> bool:
+    """The chain is 10 digits in a phone grouping, with or without a country code in front.
+
+    The country code is `52`, `521` or `52` followed by a lone `1` (legacy mobile); what follows
+    it must be a grouping the bare 10-digit path accepts.
+    """
+    body = chain.lstrip("+")
+    groups = _DIGIT_GROUP.findall(body)
+    separators = _NON_DIGITS.findall(body)  # one between each two groups
+    starts = [0]
+    if groups[0] in COUNTRY_CODE_GROUPS:
+        starts.append(1)
+        if groups[:2] == ["52", "1"]:
+            starts.append(2)
+    offsets = [0]  # where each group starts in `body`
+    for group, separator in zip(groups, separators, strict=False):
+        offsets.append(offsets[-1] + len(group) + len(separator))
+    return any(
+        _is_phone_grouping(groups[start:], separators[start:], body[offsets[start] :])
+        for start in starts
+        if start < len(groups)
     )
 
 
@@ -178,7 +196,7 @@ def bind_route(resolver: Callable[[], str]) -> None:
     _route.set(resolver)
 
 
-def log_event(name: str, **fields: str | int) -> None:
+def log_event(name: str, **fields: str | int | float | bool | None) -> None:
     """Log a named event of spec §12b; the fields become top-level keys of the line."""
     _EVENT_LOGGER.info(name, extra={_EVENT_ATTR: name, _FIELDS_ATTR: fields})
 
@@ -235,13 +253,25 @@ class RedactingFilter(logging.Filter):
             record.exc_text = redact(record.exc_text)
         if record.stack_info:
             record.stack_info = redact(record.stack_info)
-        fields: Mapping[str, str | int] | None = getattr(record, _FIELDS_ATTR, None)
+        fields: Mapping[str, object] | None = getattr(record, _FIELDS_ATTR, None)
         if fields is not None:
-            setattr(record, _FIELDS_ATTR, {k: _redact_field(v) for k, v in fields.items()})
+            setattr(record, _FIELDS_ATTR, {k: redact_value(v) for k, v in fields.items()})
 
 
-def _redact_field(value: str | int) -> str | int:
-    return redact(value) if isinstance(value, str) else value
+def redact_value(value: object) -> object:
+    """Redact one value: text as is, anything else by its text, keeping its type if that is clean.
+
+    A phone held in an int or a float (`5512345678`, `1234567890123456.0`) is replaced by its
+    redacted text; line numbers, ratios, flags and None keep their type. Other objects (a
+    `uuid.UUID`, a `Decimal`) are checked by `str()`, which is what JSON output uses for them.
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return redact(value)
+    text = str(value)
+    redacted = redact(text)
+    return value if redacted == text else redacted
 
 
 # Keys the formatter owns: a bound or event field with one of these names is dropped.
@@ -252,8 +282,8 @@ _RESERVED_KEYS = frozenset(
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        fields: Mapping[str, str | int] = getattr(record, _FIELDS_ATTR, {})
-        extras: dict[str, str | int] = {"business_id": "", **fields}  # empty until tenancy binds it
+        fields: Mapping[str, object] = getattr(record, _FIELDS_ATTR, {})
+        extras: dict[str, object] = {"business_id": "", **fields}  # empty until tenancy binds it
         resolver = _route.get()
         if resolver is not None:
             extras["route"] = resolver()
@@ -265,7 +295,7 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
             "request_id": request_id.get(),
             **{
-                key: _redact_field(value)  # fail closed: bound and route values are not filtered
+                key: redact_value(value)  # fail closed: bound and route values are not filtered
                 for key, value in extras.items()
                 if key not in _RESERVED_KEYS
             },
