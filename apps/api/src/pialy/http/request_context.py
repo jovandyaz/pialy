@@ -22,6 +22,7 @@ from pialy.observability.logging import (
 
 REQUEST_ID_HEADER = "X-Request-Id"
 _VALID_REQUEST_ID = re.compile(r"[A-Za-z0-9-]{8,64}")
+_LONG_DIGIT_RUN = re.compile(r"\d{10,}")
 
 logger = logging.getLogger("pialy.http")
 
@@ -32,8 +33,29 @@ def route_of(scope: Scope) -> str:
     return path if isinstance(path, str) else redact(str(scope["path"]))
 
 
+def _is_canonical_uuid(value: str) -> bool:
+    try:  # `uuid.UUID` also accepts braces, a URN prefix and no hyphens: compare the canonical form
+        return str(uuid.UUID(value)) == value.lower()
+    except ValueError:
+        return False
+
+
+def _is_safe_request_id(value: str) -> bool:
+    if not _VALID_REQUEST_ID.fullmatch(value):
+        return False
+    return _is_canonical_uuid(value) or not _LONG_DIGIT_RUN.search(value.replace("-", ""))
+
+
 def resolve_request_id(incoming: str | None) -> str:
-    if incoming is not None and _VALID_REQUEST_ID.fullmatch(incoming):
+    """The client's `X-Request-Id` if it is safe to log and echo, else a fresh UUID.
+
+    The header is untrusted and ends up in every log line and in the response, so it is validated
+    and, if malformed, safely replaced (OWASP Logging Cheat Sheet). Besides the shape check, an id
+    with a run of 10 or more digits once hyphens are removed (a phone, a CLABE) is replaced.
+    A canonical UUID is always kept: it is an identifier, `redact` lets it through too, and about
+    1 in 11 random UUIDs has such a run of decimal digits.
+    """
+    if incoming is not None and _is_safe_request_id(incoming):
         return incoming
     return str(uuid.uuid4())
 
