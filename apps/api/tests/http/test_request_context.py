@@ -23,7 +23,7 @@ def make_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     return create_app(Settings(), system_clock, lambda: True)
 
 
-def log_lines(capsys: pytest.CaptureFixture[str], logger: str) -> list[dict[str, str]]:
+def log_lines(capsys: pytest.CaptureFixture[str], logger: str) -> list[dict[str, object]]:
     parsed = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line]
     return [line for line in parsed if line["logger"] == logger]
 
@@ -128,4 +128,5 @@ def test_an_error_after_the_response_started_is_logged_as_aborted(
     assert sent[0]["status"] == 200
     error, access = log_lines(capsys, "pialy.http")
     assert error["level"] == "ERROR"
-    assert access["message"] == "GET /broken-stream aborted"
+    assert access["message"] == "GET /broken-stream"
+    assert access["status"] == "aborted"

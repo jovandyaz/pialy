@@ -268,7 +268,7 @@ def test_replaces_a_malformed_incoming_request_id(client: TestClient, bad: str) 
     assert re.fullmatch(r"[0-9a-f-]{36}", response.headers["x-request-id"])
 
 
-def log_lines(capsys: pytest.CaptureFixture[str]) -> list[dict[str, str]]:
+def log_lines(capsys: pytest.CaptureFixture[str]) -> list[dict[str, object]]:
     out = capsys.readouterr().out
     parsed = [json.loads(line) for line in out.splitlines() if line]
     # The test client logs its own "HTTP Request" lines; keep the app's.
@@ -296,7 +296,8 @@ def test_error_line_carries_request_id_route_and_bound_business(
         assert line["request_id"] == rid
         assert line["route"] == "/stores/{store}/boom"
         assert line["business_id"] == "biz-9"
-    assert access["message"] == "GET /stores/{store}/boom 500"
+    assert access["message"] == "GET /stores/{store}/boom"
+    assert access["status"] == 500
 
 
 def test_request_line_and_handler_line_carry_route_and_request_id(
@@ -310,7 +311,8 @@ def test_request_line_and_handler_line_carry_route_and_request_id(
         assert line["route"] == "/bookings/{token}"
         assert line["request_id"] == response.headers["x-request-id"]
         assert line["business_id"] == "biz-1"
-    assert access["message"] == "GET /bookings/{token} 200"
+    assert access["message"] == "GET /bookings/{token}"
+    assert access["status"] == 200
     assert "Zx9QbW1k" not in json.dumps([handler, access])
 
 
@@ -321,4 +323,20 @@ def test_unrouted_request_logs_the_redacted_raw_path(
     client.get("/api/bookings/Zx9QbW1kT2tlbl9TZWNyZXQ/nope")
     [access] = log_lines(capsys)
     assert access["route"] == "/api/bookings/Zx9Q…/nope"
-    assert access["message"] == "GET /api/bookings/Zx9Q…/nope 404"
+    assert access["message"] == "GET /api/bookings/Zx9Q…/nope"
+    assert access["status"] == 404
+
+
+def test_the_status_never_merges_with_a_trailing_date_or_id_in_the_path(
+    client: TestClient, capsys: pytest.CaptureFixture[str], json_logs: None
+) -> None:
+    # In one text, `2026-11-15 404` is an 11-digit chain and would be redacted whole.
+    configure_logging("INFO")
+    client.get("/x/2026-11-15")
+    client.get("/x/123456789")
+    date_line, id_line = log_lines(capsys)
+    assert date_line["message"] == "GET /x/2026-11-15"
+    assert date_line["route"] == "/x/2026-11-15"
+    assert date_line["status"] == 404
+    assert id_line["message"] == "GET /x/123456789"
+    assert id_line["status"] == 404

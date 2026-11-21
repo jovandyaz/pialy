@@ -191,9 +191,21 @@ def bind_route(resolver: Callable[[], str]) -> None:
     _route.set(resolver)
 
 
-def log_event(name: str, **fields: str | int | float | bool | None) -> None:
+type FieldValue = str | int | float | bool | None
+
+
+def log_fields(**fields: FieldValue) -> dict[str, object]:
+    """`extra=` for a log call: the fields become top-level keys of the line, redacted once.
+
+    A value that has its own key stays readable next to the message instead of merging into
+    its text (`2026-11-15 404` would be one 11-digit chain).
+    """
+    return {_FIELDS_ATTR: fields}
+
+
+def log_event(name: str, **fields: FieldValue) -> None:
     """Log a named event of spec §12b; the fields become top-level keys of the line."""
-    _EVENT_LOGGER.info(name, extra={_EVENT_ATTR: name, _FIELDS_ATTR: fields})
+    _EVENT_LOGGER.info(name, extra={_EVENT_ATTR: name, **log_fields(**fields)})
 
 
 FORMAT_ERROR_MARKER = " [log format error]"

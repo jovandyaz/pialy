@@ -15,6 +15,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from pialy.http.problems import problem_response
 from pialy.observability.logging import (
     bind_route,
+    log_fields,
     redact,
     request_context,
 )
@@ -99,4 +100,5 @@ class RequestContextMiddleware:
                 raise
             await problem_response(500)(scope, receive, send_with_id)
         finally:
-            logger.info("%s %s %s", scope["method"], route_of(scope), status)
+            # The status is a field: in the text it would merge with a path ending in digits.
+            logger.info("%s %s", scope["method"], route_of(scope), extra=log_fields(status=status))
