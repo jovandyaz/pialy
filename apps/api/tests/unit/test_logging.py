@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import random
+import sys
 import time
 import uuid
 from collections.abc import Iterator
@@ -448,22 +449,53 @@ def test_each_value_is_redacted_exactly_once(
     assert not [text for text in seen if "[digits]" in text]  # never fed its own output
 
 
-def test_a_failing_stream_never_prints_the_raw_record(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    # The stdlib `Handler.handleError` writes the raw message and args to stderr.
-    class BrokenStream(io.StringIO):
-        def write(self, text: str) -> int:
-            raise OSError("stream closed")
+class BrokenStream(io.StringIO):
+    def write(self, text: str) -> int:
+        raise OSError("stream closed")
 
+
+def broken_root_handler() -> logging.StreamHandler[io.StringIO]:
     configure_logging("INFO")
     [handler] = logging.getLogger().handlers
     assert isinstance(handler, logging.StreamHandler)
     handler.setStream(BrokenStream())
+    return handler
+
+
+def test_a_failing_stream_never_prints_the_raw_record(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The stdlib `Handler.handleError` writes the raw message and args to stderr.
+    broken_root_handler()
     logging.getLogger("x").info("call %s", PHONE)
     captured = capsys.readouterr()
     assert PHONE not in captured.err
     assert PHONE not in captured.out
+    assert captured.err == "--- Logging error: a log line could not be written (OSError) ---\n"
+
+
+def test_a_failing_stream_leaves_the_record_as_it_was(capsys: pytest.CaptureFixture[str]) -> None:
+    handler = broken_root_handler()
+    record = logging.LogRecord("x", logging.INFO, __file__, 1, "call %s", (PHONE,), None)
+    before = dict(vars(record))
+    handler.handle(record)
+    assert vars(record) == before
+    assert "OSError" in capsys.readouterr().err
+
+
+def test_a_failing_stream_is_silent_when_logging_exceptions_are_off(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    broken_root_handler()
+    monkeypatch.setattr(logging, "raiseExceptions", False)  # what the stdlib honours too
+    logging.getLogger("x").info("call %s", PHONE)
+    assert capsys.readouterr().err == ""
+
+
+def test_a_failing_stream_without_stderr_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:
+    broken_root_handler()
+    monkeypatch.setattr(sys, "stderr", None)  # pythonw and some daemons run without one
+    logging.getLogger("x").info("call %s", PHONE)
 
 
 def test_level_filters_and_rejects_unknown(capsys: pytest.CaptureFixture[str]) -> None:

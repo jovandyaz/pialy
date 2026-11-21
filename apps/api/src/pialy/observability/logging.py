@@ -358,9 +358,16 @@ class JsonFormatter(logging.Formatter):
 
 class _JsonStreamHandler(logging.StreamHandler[TextIO]):
     def handleError(self, record: logging.LogRecord) -> None:
-        """Report a failed write without the record: the stdlib prints its raw message and args."""
+        """Report a failed write by its error type only, and leave the record as it is.
+
+        The stdlib prints the raw message and args of the record. Like the stdlib, nothing is
+        written when `logging.raiseExceptions` is off or there is no stderr.
+        """
+        if not (logging.raiseExceptions and sys.stderr):
+            return
+        error = type(sys.exc_info()[1]).__name__
         with contextlib.suppress(Exception):  # nowhere left to report to
-            sys.stderr.write("--- Logging error: a log line could not be written ---\n")
+            sys.stderr.write(f"--- Logging error: a log line could not be written ({error}) ---\n")
 
 
 def configure_logging(level: str) -> None:
