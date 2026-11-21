@@ -19,6 +19,8 @@ from support import (
     Api,
     Booking,
     Pey,
+    Problem,
+    Slot,
     assert_close,
     assert_problem,
     days_ahead,
@@ -29,15 +31,15 @@ from support import (
     slot,
     slot_today,
 )
+from targets import Target
 
-SLOT = slot(days_ahead(1), 0)
-NOT_HOLDING = {
+NOT_HOLDING: Problem = {
     "type": "urn:pialy:problem:booking-not-holding",
     "title": "Conflict",
     "status": 409,
     "detail": "Esta reserva ya no está esperando el pago",
 }
-QR_FAILED = {
+QR_FAILED: Problem = {
     "type": "urn:pialy:problem:qr-failed",
     "title": "Bad Gateway",
     "status": 502,
@@ -46,9 +48,9 @@ QR_FAILED = {
 
 
 def test_creates_a_codi_qr_attempt_next_to_the_awaiting_push_and_extends_the_hold_to_its_expiry(
-    api: Api, pey: Pey
+    api: Api, pey: Pey, first_slot: Slot
 ) -> None:
-    booking = api.book(SLOT)
+    booking = api.book(first_slot)
 
     response = api.post_qr(booking.token, new_key())
 
@@ -76,8 +78,10 @@ def test_creates_a_codi_qr_attempt_next_to_the_awaiting_push_and_extends_the_hol
     assert view["attempts"] == [{"mode": "push", "status": "awaiting"}, {"mode": "qr", "status": "awaiting"}]
 
 
-def test_replays_the_same_response_for_the_same_idempotency_key_one_qr_one_rail_call(api: Api, pey: Pey) -> None:
-    booking = api.book(SLOT)
+def test_replays_the_same_response_for_the_same_idempotency_key_one_qr_one_rail_call(
+    api: Api, pey: Pey, first_slot: Slot
+) -> None:
+    booking = api.book(first_slot)
     key = new_key()
 
     first = api.post_qr(booking.token, key)
@@ -90,8 +94,8 @@ def test_replays_the_same_response_for_the_same_idempotency_key_one_qr_one_rail_
     assert len(api.view(booking.token)["attempts"]) == 2
 
 
-def test_answers_422_when_the_key_was_already_used_for_another_booking(api: Api) -> None:
-    first = api.book(SLOT)
+def test_answers_422_when_the_key_was_already_used_for_another_booking(api: Api, first_slot: Slot) -> None:
+    first = api.book(first_slot)
     other = api.book(slot(days_ahead(1), 2), phone=OTHER_PHONE)
     key = new_key()
     assert api.post_qr(first.token, key).status_code == 201
@@ -111,11 +115,11 @@ def checked_in_booking(api: Api, owner: httpx.Client) -> Booking:
 
 @pytest.mark.parametrize("status", ["confirmed", "checked_in"])
 def test_answers_409_for_a_booking_that_is_without_calling_the_rail(
-    api: Api, pey: Pey, request: pytest.FixtureRequest, status: str
+    api: Api, pey: Pey, request: pytest.FixtureRequest, status: str, first_slot: Slot
 ) -> None:
     """`expired` and `canceled` are not reachable over HTTP without the clock or a cancel route."""
     if status == "confirmed":
-        booking = api.confirmed(SLOT)
+        booking = api.confirmed(first_slot)
     else:
         booking = checked_in_booking(api, request.getfixturevalue("owner"))
     assert api.view(booking.token)["status"] == status
@@ -137,8 +141,8 @@ def test_answers_404_for_the_unknown_token(api: Api, pey: Pey, token: str) -> No
 
 
 @pytest.mark.parametrize("key", [None, "abc"], ids=["missing", "too short"])
-def test_answers_400_when_the_idempotency_key_is(api: Api, pey: Pey, key: str | None) -> None:
-    booking = api.book(SLOT)
+def test_answers_400_when_the_idempotency_key_is(api: Api, pey: Pey, key: str | None, first_slot: Slot) -> None:
+    booking = api.book(first_slot)
 
     response = api.post_qr(booking.token, key)
 
@@ -147,9 +151,10 @@ def test_answers_400_when_the_idempotency_key_is(api: Api, pey: Pey, key: str | 
 
 
 def test_answers_429_alcanzaste_el_maximo_de_intentos_to_the_4th_attempt_of_a_booking_failed_attempts_count(
-    api: Api, pey: Pey
+    api: Api, pey: Pey, first_slot: Slot, target: Target
 ) -> None:
-    booking = api.book(SLOT)
+    """Both targets refuse with the problem and charge nothing; the status is the target's (429 on TS)."""
+    booking = api.book(first_slot)
     first_key = new_key()
 
     first = api.post_qr(booking.token, first_key)
@@ -160,32 +165,40 @@ def test_answers_429_alcanzaste_el_maximo_de_intentos_to_the_4th_attempt_of_a_bo
 
     assert first.status_code == 201
     assert second.status_code == 502
-    assert is_problem(fourth, 429)
-    assert fourth.json()["type"] == "urn:pialy:problem:attempts-exhausted"
-    assert fourth.json()["status"] == 429
-    assert fourth.json()["detail"] == "Alcanzaste el máximo de intentos"
+    assert_problem(
+        fourth,
+        {
+            "type": "urn:pialy:problem:attempts-exhausted",
+            "status": target.attempts_exhausted_status(),
+            "detail": "Alcanzaste el máximo de intentos",
+        },
+    )
     assert replay.status_code == 201
     assert replay.content == first.content
     assert pey.calls("POST", "/codi/qr") == 2
     assert len(api.view(booking.token)["attempts"]) == 3
 
 
-def test_lets_only_one_of_two_concurrent_requests_take_the_last_attempt(api: Api, pey: Pey) -> None:
-    booking = api.book(SLOT)
+def test_lets_only_one_of_two_concurrent_requests_take_the_last_attempt(
+    api: Api, pey: Pey, first_slot: Slot, target: Target
+) -> None:
+    booking = api.book(first_slot)
     assert api.post_qr(booking.token, new_key()).status_code == 201
 
     responses = race(partial(api.post_qr, booking.token, new_key()), partial(api.post_qr, booking.token, new_key()))
 
-    assert sorted(r.status_code for r in responses) == [201, 429]
+    assert sorted(r.status_code for r in responses) == sorted([201, target.attempts_exhausted_status()])
     assert len(api.view(booking.token)["attempts"]) == 3
     assert pey.calls("POST", "/codi/qr") == 2
 
 
 @pytest.mark.parametrize("pey_status", [500, 400], ids=["RailUnavailableError", "RailRejectedError"])
 def test_on_rail_error_stores_a_502_fails_the_qr_attempt_and_keeps_the_push_hold_as_it_was(
-    api: Api, pey: Pey, pey_status: int
+    api: Api, pey: Pey, pey_status: int, first_slot: Slot
 ) -> None:
-    held = api.hold({"slotStart": SLOT.start, "phone": PHONE}, new_key()).json()
+    """A 5xx from pey is ambiguous (the QR may exist): reconciliation settles it later, and money that still
+    arrives is applied or flagged. This asserts only that the attempt fails and the push hold stays as it was."""
+    held = api.hold({"slotStart": first_slot.start, "phone": PHONE}, new_key()).json()
     pey.fail_next(pey_status)
     key = new_key()
 
@@ -203,9 +216,9 @@ def test_on_rail_error_stores_a_502_fails_the_qr_attempt_and_keeps_the_push_hold
 
 
 def test_withholds_the_qr_with_the_409_problem_when_the_push_is_paid_during_the_qr_call_and_keeps_its_id(
-    api: Api, pey: Pey
+    api: Api, pey: Pey, first_slot: Slot
 ) -> None:
-    held = api.hold({"slotStart": SLOT.start, "phone": PHONE}, new_key()).json()
+    held = api.hold({"slotStart": first_slot.start, "phone": PHONE}, new_key()).json()
     push_ref = pey.requests("POST", "/codi/pn")[0]["response"]["transactionId"]
     key = new_key()
     pey.stall_next()
@@ -230,8 +243,8 @@ def test_withholds_the_qr_with_the_409_problem_when_the_push_is_paid_during_the_
     assert view["attempts"] == [{"mode": "push", "status": "succeeded"}, {"mode": "qr", "status": "awaiting"}]
 
 
-def test_answers_409_solicitud_en_proceso_while_the_same_key_is_in_flight(api: Api, pey: Pey) -> None:
-    booking = api.book(SLOT)
+def test_answers_409_solicitud_en_proceso_while_the_same_key_is_in_flight(api: Api, pey: Pey, first_slot: Slot) -> None:
+    booking = api.book(first_slot)
     key = new_key()
     pey.stall_next()
 

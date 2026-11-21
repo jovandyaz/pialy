@@ -20,16 +20,17 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Literal, TypeGuard
+from typing import Literal, NotRequired, TypedDict, TypeGuard
 from urllib.parse import urlsplit
 
 from agent_toolkit.webhooks.testing import sign
 
-type Json = dict[str, Any]
+from currency import CURRENCY, pesos
+
+type JsonObject = dict[str, object]
 type ChargeKind = Literal["pn", "qr"]
 
 SYNTHETIC_CLABE = "123456789012345678"
-CURRENCY = "MXN"
 DEFAULT_BANK_CODE = 40012
 CODI_ACCOUNT_TYPE = 40
 API_KEY_ID = "01FAKEPEYAPIKEY00000000000"
@@ -41,9 +42,11 @@ STALL_LIMIT_SECONDS = 30.0
 # Below the suite's 15 s request timeout, so a hung target answers 502 before the control call gives up.
 DELIVERY_TIMEOUT_SECONDS = 10.0
 MAX_BODY_BYTES = 1_000_000
-CENTAVOS_PER_PESO = 100
+MAX_CONTENT_LENGTH_DIGITS = len(str(MAX_BODY_BYTES))
+WEBHOOK_SCHEMES = ("http", "https")
 MAX_HTTP_STATUS = 599
 
+URL_FORBIDDEN_CHARS = re.compile(r"[\x00-\x20\x7f]")
 TRANSACTION_PATH = re.compile(r"^/transaction/([^/]+)$")
 QR_TRANSACTIONS_PATH = re.compile(r"^/transaction/codi/qr/([^/]+)$")
 
@@ -56,13 +59,37 @@ class ControlError(Exception):
         self.status = status
 
 
+class PaymentMetadata(TypedDict):
+    clabe: str
+    accountType: int
+    description: str
+    trackingKey: str
+    externalMetadata: JsonObject
+    bankCode: NotRequired[int]
+
+
+class PeyWebhook(TypedDict):
+    """A `codi.pn.payment_received` or `codi.qr.payment_received` event as pey sends it."""
+
+    amount: float
+    apiKeyId: str
+    concept: str
+    datePaid: int
+    metadata: PaymentMetadata
+    numRef: str
+    transactionId: str
+    type: str
+    bankAccountId: NotRequired[str]
+    codiQrId: NotRequired[str]
+
+
 @dataclass(frozen=True)
 class Charge:
     kind: ChargeKind
     ref: str
     concept: str
     num_ref: str
-    metadata: Json
+    metadata: JsonObject
     expiration: int
     created_at: int
 
@@ -83,9 +110,17 @@ class RecordedRequest:
     method: str
     path: str
     authorized: bool
-    body: Json | None
+    body: JsonObject | None
     status: int
-    response: Json
+    response: JsonObject
+
+
+@dataclass(frozen=True)
+class DeliveryOptions:
+    url: str
+    webhook_id: str
+    signed_at: datetime
+    send: bool
 
 
 @dataclass
@@ -103,10 +138,6 @@ def is_int(value: object) -> TypeGuard[int]:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def pesos(minor: int) -> float:
-    return round(minor / CENTAVOS_PER_PESO, 2)
-
-
 def new_transaction_id() -> str:
     return "01" + secrets.token_hex(12).upper()
 
@@ -115,7 +146,7 @@ def digits(count: int) -> str:
     return "".join(secrets.choice("0123456789") for _ in range(count))
 
 
-def pey_error(status: int, message: str) -> Json:
+def pey_error(status: int, message: str) -> JsonObject:
     error_type = "SERVICE_UNAVAILABLE" if status >= HTTPStatus.INTERNAL_SERVER_ERROR else "INVALID_PARAMETER"
     return {"error": {"message": message, "type": error_type, "requestId": f"req_{uuid.uuid4().hex}"}}
 
@@ -127,7 +158,7 @@ class FakePey:
         self._lock = threading.Lock()
         self._state = State()
 
-    def api(self, method: str, path: str, body: Json | None, authorized: bool) -> tuple[int, Json]:
+    def api(self, method: str, path: str, body: JsonObject | None, authorized: bool) -> tuple[int, JsonObject]:
         """Answers one pey API call and records it; a queued failure or stall applies first."""
         gate: threading.Event | None = None
         with self._lock:
@@ -147,7 +178,7 @@ class FakePey:
             gate.wait(STALL_LIMIT_SECONDS)
         return answer
 
-    def _answer(self, method: str, path: str, body: Json | None) -> tuple[int, Json]:
+    def _answer(self, method: str, path: str, body: JsonObject | None) -> tuple[int, JsonObject]:
         if method == "POST" and path in ("/codi/pn", "/codi/qr"):
             return self._create_charge("pn" if path == "/codi/pn" else "qr", body or {})
         if method == "GET" and (match := QR_TRANSACTIONS_PATH.match(path)):
@@ -156,16 +187,18 @@ class FakePey:
             return self._transaction(match.group(1))
         return HTTPStatus.NOT_FOUND, pey_error(HTTPStatus.NOT_FOUND, "not found")
 
-    def _create_charge(self, kind: ChargeKind, body: Json) -> tuple[int, Json]:
+    def _create_charge(self, kind: ChargeKind, body: JsonObject) -> tuple[int, JsonObject]:
         required = ("amount", "concept", "expiration", "numRef") + (("phoneNumber",) if kind == "pn" else ())
         missing = [name for name in required if name not in body]
         if missing:
             return HTTPStatus.BAD_REQUEST, pey_error(HTTPStatus.BAD_REQUEST, f"missing {', '.join(missing)}")
-        expiration, metadata = body["expiration"], body.get("metadata") or {}
+        expiration, metadata = body["expiration"], body.get("metadata")
         if not is_int(expiration):
             return HTTPStatus.BAD_REQUEST, pey_error(HTTPStatus.BAD_REQUEST, "expiration must be an integer")
+        if metadata is None:
+            metadata = {}
         if not isinstance(metadata, dict):
-            return HTTPStatus.BAD_REQUEST, pey_error(HTTPStatus.BAD_REQUEST, "metadata must be an object")
+            return HTTPStatus.BAD_REQUEST, pey_error(HTTPStatus.BAD_REQUEST, "metadata must be an object or null")
         ref = new_transaction_id() if kind == "pn" else secrets.token_hex(QR_ID_BYTES)
         self._state.charges[ref] = Charge(
             kind=kind,
@@ -181,7 +214,7 @@ class FakePey:
         qr_string = json.dumps({"TYP": 20, "v": {"DEV": "00000000000000/0"}, "ic": {"IDC": ref}}, separators=(",", ":"))
         return HTTPStatus.CREATED, {"id": ref, "qrString": qr_string, "qrImage": None}
 
-    def _transaction(self, transaction_id: str) -> tuple[int, Json]:
+    def _transaction(self, transaction_id: str) -> tuple[int, JsonObject]:
         payment = self._state.payments.get(transaction_id)
         if payment is not None:
             return HTTPStatus.OK, transaction_body(payment)
@@ -196,22 +229,26 @@ class FakePey:
             }
         return HTTPStatus.NOT_FOUND, pey_error(HTTPStatus.NOT_FOUND, "transaction not found")
 
-    def _qr_transactions(self, qr_id: str) -> tuple[int, Json]:
+    def _qr_transactions(self, qr_id: str) -> tuple[int, JsonObject]:
         charge = self._state.charges.get(qr_id)
         if charge is None or charge.kind != "qr":
             return HTTPStatus.NOT_FOUND, pey_error(HTTPStatus.NOT_FOUND, "qr not found")
         items = [transaction_body(p) for p in self._state.payments.values() if p.charge.ref == qr_id]
         return HTTPStatus.OK, {"items": items, "nextToken": None}
 
-    def pay(self, body: Json) -> Json:
+    def pay(self, body: JsonObject) -> JsonObject:
         provider_ref, amount = body.get("provider_ref"), body.get("amount")
         fee, bank_code = body.get("fee", 0), body.get("bank_code", DEFAULT_BANK_CODE)
+        external = body.get("external_metadata")
         if not isinstance(provider_ref, str) or not is_int(amount):
             raise ControlError(HTTPStatus.BAD_REQUEST, "provider_ref (str) and amount (int, minor units) are required")
         if not is_int(fee):
             raise ControlError(HTTPStatus.BAD_REQUEST, "fee must be an int (minor units)")
         if bank_code is not None and not is_int(bank_code):
             raise ControlError(HTTPStatus.BAD_REQUEST, "bank_code must be an int, or null to leave it out")
+        if external is not None and not isinstance(external, dict):
+            raise ControlError(HTTPStatus.BAD_REQUEST, "external_metadata must be an object")
+        options = self._delivery_options(body)
         with self._lock:
             charge = self._state.charges.get(provider_ref)
             if charge is None:
@@ -230,38 +267,51 @@ class FakePey:
                 bank_code=bank_code,
             )
             self._state.payments[payment.transaction_id] = payment
-        external = body.get("external_metadata", charge.metadata)
-        delivered = self.deliver(
-            {"body": webhook_body(payment, external), "webhook_url": body.get("webhook_url"), "send": body.get("send")}
-        )
+        webhook = webhook_body(payment, charge.metadata if external is None else external)
         return {
             "transaction_id": payment.transaction_id,
             "tracking_key": payment.tracking_key,
             "date_paid": payment.date_paid,
-            **delivered,
+            **self._deliver(json.dumps(webhook), options),
         }
 
-    def deliver(self, body: Json) -> Json:
+    def deliver(self, body: JsonObject) -> JsonObject:
         """Signs `body["body"]` (a string sent as is, or JSON to serialize) and POSTs it to the target.
 
         With `"send": false` the signed delivery is only returned, for a test to post (or tamper) itself.
         """
         raw = body.get("body")
         payload = raw if isinstance(raw, str) else json.dumps(raw)
-        url = body.get("webhook_url") or self._webhook_url
-        if not url:
-            raise ControlError(HTTPStatus.BAD_REQUEST, "webhook_url is required (or start with --webhook-url)")
-        webhook_id = body.get("webhook_id") or f"msg_{uuid.uuid4().hex}"
-        signed = sign(payload.encode(), self._secret(), webhook_id, datetime.now(UTC))
+        return self._deliver(payload, self._delivery_options(body))
+
+    def _delivery_options(self, body: JsonObject) -> DeliveryOptions:
+        url = body.get("webhook_url")
+        url = self._webhook_url if url is None else url
+        if not isinstance(url, str) or not is_webhook_url(url):
+            raise ControlError(
+                HTTPStatus.BAD_REQUEST, "webhook_url must be an http(s) URL (or start with --webhook-url)"
+            )
+        webhook_id = body.get("webhook_id")
+        webhook_id = f"msg_{uuid.uuid4().hex}" if webhook_id is None else webhook_id
+        if not isinstance(webhook_id, str) or not webhook_id:
+            raise ControlError(HTTPStatus.BAD_REQUEST, "webhook_id must be a non-empty string")
+        send = body.get("send")
+        send = True if send is None else send
+        if not isinstance(send, bool):
+            raise ControlError(HTTPStatus.BAD_REQUEST, "send must be a boolean")
+        return DeliveryOptions(url, webhook_id, signed_at(body.get("timestamp")), send)
+
+    def _deliver(self, payload: str, options: DeliveryOptions) -> JsonObject:
+        signed = sign(payload.encode(), self._secret(), options.webhook_id, options.signed_at)
         headers = {"content-type": "application/json"} | signed
-        delivery = {"url": url, "headers": headers, "body": payload}
-        if body.get("send") is False:
+        delivery: JsonObject = {"url": options.url, "headers": headers, "body": payload}
+        if not options.send:
             return {"delivery": delivery, "response": None}
-        request = urllib.request.Request(url, data=payload.encode(), headers=headers, method="POST")
+        request = urllib.request.Request(options.url, data=payload.encode(), headers=headers, method="POST")
         try:
             status, content_type, text = post(request)
-        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError) as error:
-            raise ControlError(HTTPStatus.BAD_GATEWAY, f"delivery to {url} failed: {error!r}") from error
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError, UnicodeError) as error:
+            raise ControlError(HTTPStatus.BAD_GATEWAY, f"delivery to {options.url} failed: {error!r}") from error
         return {
             "delivery": delivery,
             "response": {
@@ -271,7 +321,7 @@ class FakePey:
             },
         }
 
-    def fail_next(self, body: Json) -> None:
+    def fail_next(self, body: JsonObject) -> None:
         status, times = body.get("status"), body.get("times", 1)
         if not is_int(status) or not HTTPStatus.BAD_REQUEST <= status <= MAX_HTTP_STATUS:
             raise ControlError(HTTPStatus.BAD_REQUEST, "status must be an int from 400 to 599")
@@ -300,12 +350,44 @@ class FakePey:
         with self._lock:
             self._state = State()
 
-    def requests(self) -> Json:
+    def requests(self) -> JsonObject:
         with self._lock:
             return {"requests": [asdict(request) for request in self._state.requests]}
 
     def _secret(self) -> str:
         return self._secret_file.read_text().strip()
+
+
+def is_webhook_url(url: str) -> bool:
+    """An absolute http(s) URL that urllib can send to.
+
+    ASCII only (http.client encodes the request line as ASCII), no whitespace or controls, a valid port,
+    and a host the idna codec accepts (the socket layer encodes it so; `a..b` has an empty label).
+    """
+    if not url.isascii() or URL_FORBIDDEN_CHARS.search(url):
+        return False
+    try:
+        parts = urlsplit(url)
+        _ = parts.port  # raises ValueError when the port is out of range
+        host = parts.hostname
+        if not host:
+            return False
+        host.encode("idna")  # raises UnicodeError, a ValueError, for an empty or overlong label
+    except ValueError:
+        return False
+    return parts.scheme in WEBHOOK_SCHEMES
+
+
+def signed_at(timestamp: object) -> datetime:
+    """The signing instant: now, or the epoch seconds a test asked for (to probe timestamp tolerance)."""
+    if timestamp is None:
+        return datetime.now(UTC)
+    if not is_int(timestamp):
+        raise ControlError(HTTPStatus.BAD_REQUEST, "timestamp must be an int (epoch seconds)")
+    try:
+        return datetime.fromtimestamp(timestamp, UTC)
+    except (OverflowError, OSError, ValueError) as error:
+        raise ControlError(HTTPStatus.BAD_REQUEST, f"timestamp {timestamp} is not a date") from error
 
 
 def post(request: urllib.request.Request) -> tuple[int, str | None, bytes]:
@@ -317,7 +399,7 @@ def post(request: urllib.request.Request) -> tuple[int, str | None, bytes]:
         return error.code, error.headers.get("content-type"), error.read()
 
 
-def transaction_body(payment: Payment) -> Json:
+def transaction_body(payment: Payment) -> JsonObject:
     return {
         "id": payment.transaction_id,
         "status": "PAID",
@@ -332,8 +414,8 @@ def transaction_body(payment: Payment) -> Json:
     }
 
 
-def payment_metadata(payment: Payment, external: Json) -> Json:
-    metadata: Json = {
+def payment_metadata(payment: Payment, external: JsonObject) -> PaymentMetadata:
+    metadata: PaymentMetadata = {
         "clabe": SYNTHETIC_CLABE,
         "accountType": CODI_ACCOUNT_TYPE,
         "description": payment.charge.concept,
@@ -345,8 +427,8 @@ def payment_metadata(payment: Payment, external: Json) -> Json:
     return metadata
 
 
-def webhook_body(payment: Payment, external: Json) -> Json:
-    body: Json = {
+def webhook_body(payment: Payment, external: JsonObject) -> PeyWebhook:
+    body: PeyWebhook = {
         "amount": pesos(payment.amount_minor + payment.fee_minor),
         "apiKeyId": API_KEY_ID,
         "concept": payment.charge.concept,
@@ -357,11 +439,13 @@ def webhook_body(payment: Payment, external: Json) -> Json:
         "type": "codi.pn.payment_received",
     }
     if payment.charge.kind == "qr":
-        body |= {"bankAccountId": BANK_ACCOUNT_ID, "codiQrId": payment.charge.ref, "type": "codi.qr.payment_received"}
+        body["bankAccountId"] = BANK_ACCOUNT_ID
+        body["codiQrId"] = payment.charge.ref
+        body["type"] = "codi.qr.payment_received"
     return body
 
 
-def parse_json(text: str) -> Any:
+def parse_json(text: str) -> object:
     try:
         return json.loads(text)
     except ValueError:
@@ -390,7 +474,7 @@ class Handler(BaseHTTPRequestHandler):
         except ControlError as error:
             self._send(error.status, {"error": str(error)})
 
-    def _control(self, pey: FakePey, method: str, path: str, body: Json) -> Json:
+    def _control(self, pey: FakePey, method: str, path: str, body: JsonObject) -> JsonObject:
         if method == "GET" and path == "/_control/requests":
             return pey.requests()
         if method != "POST":
@@ -414,10 +498,15 @@ class Handler(BaseHTTPRequestHandler):
                 raise ControlError(HTTPStatus.NOT_FOUND, f"no control endpoint {path}")
         return {"ok": True}
 
-    def _json_body(self) -> Json | None:
+    def _json_body(self) -> JsonObject | None:
         declared = self.headers.get("content-length") or "0"
         if not (declared.isascii() and declared.isdigit()):
             raise ControlError(HTTPStatus.BAD_REQUEST, "content-length must be a non-negative integer")
+        # Checked before int(): past 4300 digits int() raises (the int max str digits limit).
+        if len(declared) > MAX_CONTENT_LENGTH_DIGITS:
+            raise ControlError(
+                HTTPStatus.BAD_REQUEST, f"content-length has more than {MAX_CONTENT_LENGTH_DIGITS} digits"
+            )
         length = int(declared)
         if length == 0:
             return None
@@ -431,7 +520,7 @@ class Handler(BaseHTTPRequestHandler):
             raise ControlError(HTTPStatus.BAD_REQUEST, "body must be a JSON object")
         return parsed
 
-    def _send(self, status: int, body: Json) -> None:
+    def _send(self, status: int, body: JsonObject) -> None:
         payload = json.dumps(body).encode()
         self.send_response(status)
         self.send_header("content-type", "application/json")

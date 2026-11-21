@@ -5,19 +5,18 @@ from contextlib import ExitStack
 import httpx
 import pytest
 
-from support import Api, Pey, days_ahead, event_stream, is_problem, outcome, slot, wait_until
+from support import Api, Pey, Slot, event_stream, is_problem, outcome, wait_until
 
-SLOT = slot(days_ahead(1), 0)
 LISTENERS_PER_BOOKING = 20
 RECONNECT_BLOCK = "retry: 2000"
 CONFIRMED_BLOCK = 'data: {"type":"booking.updated","status":"confirmed"}'
 
 
 def test_streams_the_booking_topic_event_stream_headers_reconnect_delay_then_events_only_after_they_commit(
-    api: Api, pey: Pey
+    api: Api, pey: Pey, first_slot: Slot
 ) -> None:
     """Commit ordering is internal; from outside, the payment's event arrives with only type and status."""
-    booking = api.book(SLOT)
+    booking = api.book(first_slot)
 
     with event_stream(api.client, api.url(f"/bookings/{booking.token}/events")) as stream:
         assert stream.response.status_code == 200
@@ -42,9 +41,9 @@ def stream_status(api: Api, token: str) -> int:
         return stream.response.status_code
 
 
-def test_unsubscribes_when_the_client_goes_away(api: Api) -> None:
+def test_unsubscribes_when_the_client_goes_away(api: Api, first_slot: Slot) -> None:
     """Seen from outside through the per-booking cap: closed listeners free their places."""
-    booking = api.book(SLOT)
+    booking = api.book(first_slot)
     with ExitStack() as stack:
         open_listeners(stack, api, booking.token, LISTENERS_PER_BOOKING)
         assert stream_status(api, booking.token) == 503
@@ -61,8 +60,8 @@ def test_answers_404_for(api: Api, token: str) -> None:
     assert is_problem(response, 404)
 
 
-def test_answers_503_when_the_booking_already_has_as_many_listeners_as_allowed(api: Api) -> None:
-    booking = api.book(SLOT)
+def test_answers_503_when_the_booking_already_has_as_many_listeners_as_allowed(api: Api, first_slot: Slot) -> None:
+    booking = api.book(first_slot)
 
     with ExitStack() as stack:
         open_listeners(stack, api, booking.token, LISTENERS_PER_BOOKING)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from http import HTTPStatus
 from typing import Literal, Protocol
 
 import httpx
@@ -45,8 +46,12 @@ class Target(Protocol):
         """The route that answers 200 only while the database is reachable."""
         ...
 
-    def readiness_body(self) -> dict[str, object] | None:
-        """Its exact 200 body, or None where the contract fixes only a 200 JSON answer."""
+    def readiness_body(self) -> dict[str, object]:
+        """Its 200 body."""
+        ...
+
+    def attempts_exhausted_status(self) -> int:
+        """The status for a booking out of QR attempts: a cap that never resets, so not a 429 by RFC 6585."""
         ...
 
     def login(self, client: httpx.Client) -> None:
@@ -74,8 +79,11 @@ class TsTarget:
     def readiness_path(self) -> str:
         return "/healthz"
 
-    def readiness_body(self) -> dict[str, object] | None:
+    def readiness_body(self) -> dict[str, object]:
         return self.health_body()
+
+    def attempts_exhausted_status(self) -> int:
+        return HTTPStatus.TOO_MANY_REQUESTS
 
     def login(self, client: httpx.Client) -> None:
         client.post("/api/session", json={"pin": self.pin}).raise_for_status()
@@ -105,8 +113,11 @@ class PyTarget:
     def readiness_path(self) -> str:
         return "/readyz"
 
-    def readiness_body(self) -> dict[str, object] | None:
-        return None
+    def readiness_body(self) -> dict[str, object]:
+        return {"status": "ready"}
+
+    def attempts_exhausted_status(self) -> int:
+        return HTTPStatus.CONFLICT
 
     def login(self, client: httpx.Client) -> None:
         credentials = {"email": self.owner_email, "password": self.owner_password}

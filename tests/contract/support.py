@@ -9,23 +9,36 @@ import secrets
 import threading
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from datetime import time as wall_time
 from ipaddress import IPv4Address
-from typing import Any
+from typing import Any, NotRequired, Required, TypedDict
 from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
 
-from fake_pey.server import CURRENCY, DEFAULT_BANK_CODE, Charge, Payment, webhook_body
+from currency import CURRENCY, pesos
+from fake_pey.server import DEFAULT_BANK_CODE, Charge, Payment, PeyWebhook, webhook_body
 from targets import Target
 
+# Wire JSON as `httpx.Response.json()` returns it (Any): the tests index answers freely, and narrowing
+# every access would bury the assertions. Request bodies the suite builds are typed below instead.
 type Json = dict[str, Any]
+
+
+class Problem(TypedDict, total=False):
+    """RFC 9457 members a test expects; the answer may hold more."""
+
+    type: str
+    title: str
+    status: Required[int]
+    detail: str
+
 
 BUSINESS_TZ = ZoneInfo("America/Mexico_City")
 OPENING = wall_time(9, 0)
@@ -34,7 +47,7 @@ SERVICE_MINUTES = 45
 SLOTS_PER_DAY = 14
 BUSINESS_NAME = "Estudio Demo"
 DEPOSIT_MINOR = 1
-DEPOSIT_PESOS = 0.01
+DEPOSIT_PESOS = pesos(DEPOSIT_MINOR)
 DEPOSIT_CONCEPT = f"Anticipo {BUSINESS_NAME}"
 DEFAULT_BANK_NAME = "BBVA"
 HOLD_SECONDS = 360
@@ -50,7 +63,7 @@ HOLDING_BLOCK = 'data: {"type":"booking.updated","status":"holding"}'
 SLOT_TAKEN_TYPE = "urn:pialy:problem:slot-taken"
 KEY_REUSED_TYPE = "urn:pialy:problem:idempotency-key-reused"
 IN_PROGRESS_TYPE = "urn:pialy:problem:request-in-progress"
-PUSH_FAILED = {
+PUSH_FAILED: Problem = {
     "type": "urn:pialy:problem:push-failed",
     "title": "Bad Gateway",
     "status": 502,
@@ -151,10 +164,21 @@ def is_problem(response: httpx.Response, status: int) -> bool:
     return response.status_code == status and PROBLEM in response.headers.get("content-type", "")
 
 
-def assert_problem(response: httpx.Response, expected: Json) -> None:
-    """A problem+json answer holding `expected`; a backend may add members such as `requestId`."""
-    assert is_problem(response, expected["status"]), response.text
-    assert expected.items() <= response.json().items(), response.text
+def assert_problem(response: httpx.Response, expected: Problem, context: str = "") -> None:
+    """A problem+json answer holding `expected`; a backend may add members such as `requestId`.
+
+    `context` names the case in a failure message, for checks made in a loop.
+    """
+    where = f"{context}: " if context else ""
+    assert is_problem(response, expected["status"]), f"{where}{response.status_code} {response.text}"
+    assert expected.items() <= response.json().items(), f"{where}{response.text}"
+
+
+def retry_after_seconds(response: httpx.Response) -> int:
+    """The `Retry-After` of an answer as delay-seconds (RFC 9110 section 10.2.3), the form 429s here use."""
+    value = response.headers.get("retry-after", "")
+    assert value.isascii() and value.isdigit(), f"Retry-After is {value!r}, not delay-seconds"
+    return int(value)
 
 
 def wait_until[T](probe: Callable[[], T | None], what: str) -> T:
@@ -182,6 +206,32 @@ def race[T](*calls: Callable[[], T]) -> list[T]:
         return list(pool.map(run, calls))
 
 
+class PayRequest(TypedDict):
+    provider_ref: str
+    amount: int
+    fee: int
+    bank_code: int | None
+    webhook_url: str
+    send: bool
+    external_metadata: NotRequired[Mapping[str, object]]
+
+
+class DeliverRequest(TypedDict):
+    body: Mapping[str, object] | str
+    webhook_url: str
+    send: bool
+    webhook_id: NotRequired[str]
+    timestamp: NotRequired[int]
+
+
+class FailNextRequest(TypedDict):
+    status: int
+    times: int
+
+
+type ControlRequest = PayRequest | DeliverRequest | FailNextRequest
+
+
 class Pey:
     """Drives the fake pey's control endpoints."""
 
@@ -189,7 +239,7 @@ class Pey:
         self._client = client
         self.webhook_url = webhook_url
 
-    def _control(self, path: str, body: Json | None = None) -> Json:
+    def _control(self, path: str, body: ControlRequest | None = None) -> Json:
         response = self._client.post(f"/_control/{path}", json=body or {})
         response.raise_for_status()
         result: Json = response.json()
@@ -199,7 +249,7 @@ class Pey:
         self._control("reset")
 
     def fail_next(self, status: int, times: int = 1) -> None:
-        self._control("fail-next", {"status": status, "times": times})
+        self._control("fail-next", FailNextRequest(status=status, times=times))
 
     def clear_failures(self) -> None:
         """Drops the failures `fail_next` queued that no call has used yet."""
@@ -231,15 +281,48 @@ class Pey:
             f"{count} x {method} {path} at the fake pey",
         )
 
-    def pay(self, provider_ref: str, amount: int = DEPOSIT_MINOR, **options: Any) -> Json:
-        """Pays a charge and delivers the signed webhook; the result holds the target's answer."""
-        return self._control(
-            "pay", {"provider_ref": provider_ref, "amount": amount, "webhook_url": self.webhook_url, **options}
-        )
+    def pay(
+        self,
+        provider_ref: str,
+        amount: int = DEPOSIT_MINOR,
+        *,
+        fee: int = 0,
+        bank_code: int | None = DEFAULT_BANK_CODE,
+        external_metadata: Mapping[str, object] | None = None,
+        send: bool = True,
+    ) -> Json:
+        """Pays a charge and delivers the signed webhook; the result holds the target's answer.
 
-    def deliver(self, body: Json | str, **options: Any) -> Json:
-        """Signs any webhook body and delivers it (unless `send=False`)."""
-        return self._control("deliver", {"body": body, "webhook_url": self.webhook_url, **options})
+        `amount` is the charge's base and `fee` the payer's fee on top; `bank_code=None` leaves the bank out;
+        `external_metadata` replaces what the charge carried.
+        """
+        request = PayRequest(
+            provider_ref=provider_ref,
+            amount=amount,
+            fee=fee,
+            bank_code=bank_code,
+            webhook_url=self.webhook_url,
+            send=send,
+        )
+        if external_metadata is not None:
+            request["external_metadata"] = external_metadata
+        return self._control("pay", request)
+
+    def deliver(
+        self,
+        body: Mapping[str, object] | str,
+        *,
+        webhook_id: str | None = None,
+        timestamp: int | None = None,
+        send: bool = True,
+    ) -> Json:
+        """Signs any webhook body and delivers it, under `webhook_id` and at `timestamp` (epoch seconds) if given."""
+        request = DeliverRequest(body=body, webhook_url=self.webhook_url, send=send)
+        if webhook_id is not None:
+            request["webhook_id"] = webhook_id
+        if timestamp is not None:
+            request["timestamp"] = timestamp
+        return self._control("deliver", request)
 
 
 def outcome(delivered: Json) -> str:
@@ -255,13 +338,29 @@ def failed_with_problem(delivered: Json, status: int) -> bool:
     return response["status"] == status and PROBLEM in (response["content_type"] or "")
 
 
-def pn_webhook(transaction_id: str, attempt_id: str | None = None, **fields: Any) -> Json:
+def pn_webhook(transaction_id: str, attempt_id: str | None = None, concept: str = DEPOSIT_CONCEPT) -> PeyWebhook:
     """A push payment webhook built the way the fake builds its own, for money no charge of the fake asked for."""
     now = int(time.time())
-    external: Json = {} if attempt_id is None else {"attemptId": attempt_id}
-    charge = Charge("pn", transaction_id, DEPOSIT_CONCEPT, "1", external, HOLD_SECONDS, now)
-    payment = Payment(transaction_id, charge, DEPOSIT_MINOR, 0, now, UNMATCHED_TRACKING_KEY, DEFAULT_BANK_CODE)
-    return webhook_body(payment, external) | fields
+    external: dict[str, object] = {} if attempt_id is None else {"attemptId": attempt_id}
+    charge = Charge(
+        kind="pn",
+        ref=transaction_id,
+        concept=concept,
+        num_ref="1",
+        metadata=external,
+        expiration=HOLD_SECONDS,
+        created_at=now,
+    )
+    payment = Payment(
+        transaction_id=transaction_id,
+        charge=charge,
+        amount_minor=DEPOSIT_MINOR,
+        fee_minor=0,
+        date_paid=now,
+        tracking_key=UNMATCHED_TRACKING_KEY,
+        bank_code=DEFAULT_BANK_CODE,
+    )
+    return webhook_body(payment, external)
 
 
 def redeliver(client: httpx.Client, delivered: Json, body: str | None = None) -> httpx.Response:
@@ -288,13 +387,13 @@ class Api:
     def url(self, path: str) -> str:
         return self.target.prefix(path)
 
-    def hold(self, body: Json, key: str | None = None) -> httpx.Response:
+    def hold(self, body: Mapping[str, object], key: str | None = None) -> httpx.Response:
         headers = {} if key is None else {"idempotency-key": key}
         return self.client.post(self.url("/bookings"), json=body, headers=headers)
 
     def book(self, at: Slot, phone: str = PHONE, customer_name: str | None = None) -> Booking:
         """Holds `at` and returns the booking with its push charge at the fake pey."""
-        body: Json = {"slotStart": at.start, "phone": phone}
+        body: dict[str, str] = {"slotStart": at.start, "phone": phone}
         if customer_name is not None:
             body["customerName"] = customer_name
         response = self.hold(body, new_key())
@@ -302,9 +401,15 @@ class Api:
         push_ref: str = self.pey.requests("POST", "/codi/pn")[-1]["response"]["transactionId"]
         return Booking(response.json()["token"], push_ref, at)
 
-    def confirmed(self, at: Slot, phone: str = PHONE, customer_name: str | None = None, **pay: Any) -> Booking:
+    def confirmed(
+        self,
+        at: Slot,
+        phone: str = PHONE,
+        customer_name: str | None = None,
+        bank_code: int | None = DEFAULT_BANK_CODE,
+    ) -> Booking:
         booking = self.book(at, phone, customer_name)
-        assert outcome(self.pey.pay(booking.push_ref, **pay)) == "applied"
+        assert outcome(self.pey.pay(booking.push_ref, bank_code=bank_code)) == "applied"
         return booking
 
     def post_qr(self, token: str, key: str | None = None) -> httpx.Response:

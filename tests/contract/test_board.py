@@ -1,6 +1,7 @@
 """The owner's session, the board, and the verify and pass lookups."""
 
 import time
+from datetime import date
 
 import httpx
 import pytest
@@ -17,20 +18,22 @@ from support import (
     TOO_MANY_ATTEMPTS,
     Api,
     Pey,
+    assert_problem,
     days_ahead,
     is_problem,
     iso_from_epoch,
     new_client,
     new_key,
     outcome,
+    retry_after_seconds,
     slot,
     today,
     unknown_token,
 )
 from targets import Target, TsTarget
 
-DAY = days_ahead(1)
 PIN_ATTEMPTS_PER_IP = 5
+PIN_LIMIT_WINDOW_SECONDS = 600
 SESSION_SECONDS = 12 * 3600
 UNKNOWN_FLAG_ID = "2c4e6a1e-1f6e-4d5a-9a53-3f3b2f6e9d11"
 
@@ -40,10 +43,10 @@ def ts(target: Target) -> TsTarget:
     return target
 
 
-def test_answers_401_without_the_cookie_on_every_owner_endpoint(api: Api) -> None:
-    token = api.confirmed(slot(DAY, 0)).token
+def test_answers_401_without_the_cookie_on_every_owner_endpoint(api: Api, day: date) -> None:
+    token = api.confirmed(slot(day, 0)).token
     calls = [
-        ("GET", api.url(f"/board?date={DAY.isoformat()}"), None),
+        ("GET", api.url(f"/board?date={day.isoformat()}"), None),
         ("GET", api.url("/board/events"), None),
         ("GET", api.url(f"/verify/{token}"), None),
         ("POST", api.url(f"/bookings/{token}/check-in"), None),
@@ -52,7 +55,7 @@ def test_answers_401_without_the_cookie_on_every_owner_endpoint(api: Api) -> Non
 
     for method, url, body in calls:
         response = api.client.request(method, url, json=body)
-        assert is_problem(response, 401), f"{method} {url}"
+        assert_problem(response, {"status": 401}, f"{method} {url}")
 
 
 @pytest.mark.ts_only
@@ -67,6 +70,7 @@ def test_rejects_a_wrong_pin_and_limits_attempts_to_5_per_10_minutes_per_ip_the_
 
     assert statuses == [401] * PIN_ATTEMPTS_PER_IP + [429]
     assert is_problem(limited, 429)
+    assert 0 < retry_after_seconds(limited) <= PIN_LIMIT_WINDOW_SECONDS
     assert limited.json()["status"] == 429
     assert limited.json()["detail"] == TOO_MANY_ATTEMPTS
     assert login(ts(target).pin).status_code == 429
@@ -89,10 +93,10 @@ def test_sets_a_signed_httponly_samesite_strict_cookie_that_lasts_12_hours(
 
 
 def test_accepts_the_cookie_and_rejects_a_tampered_one_and_one_older_than_12_hours(
-    api: Api, owner: httpx.Client, base_url: str
+    api: Api, owner: httpx.Client, base_url: str, day: date
 ) -> None:
     """The 12-hour half needs clock control. Tampering works on whatever cookies the login set."""
-    url = api.url(f"/board?date={DAY.isoformat()}")
+    url = api.url(f"/board?date={day.isoformat()}")
     session = {cookie.name: cookie.value for cookie in owner.cookies.jar}
 
     def board_with(cookies: dict[str, str]) -> int:
@@ -114,22 +118,22 @@ def test_logs_out_by_clearing_the_cookie(client: httpx.Client) -> None:
 
 
 def test_lists_the_day_with_each_booking_as_name_last_4_and_bank_name_and_never_the_phone_hash_or_clabe(
-    api: Api, pey: Pey, owner: httpx.Client
+    api: Api, pey: Pey, owner: httpx.Client, day: date
 ) -> None:
     """`late: true` needs a late payment, which needs the clock; this covers the rest of the row."""
-    confirmed = api.confirmed(slot(DAY, 0), customer_name=CUSTOMER)
-    api.book(slot(DAY, 1), phone=OTHER_PHONE, customer_name=CUSTOMER)
+    confirmed = api.confirmed(slot(day, 0), customer_name=CUSTOMER)
+    api.book(slot(day, 1), phone=OTHER_PHONE, customer_name=CUSTOMER)
     pey.fail_next(500)
-    assert api.hold({"slotStart": slot(DAY, 2).start, "phone": THIRD_PHONE}, new_key()).status_code == 502
+    assert api.hold({"slotStart": slot(day, 2).start, "phone": THIRD_PHONE}, new_key()).status_code == 502
 
-    response = owner.get(api.url("/board"), params={"date": DAY.isoformat()})
+    response = owner.get(api.url("/board"), params={"date": day.isoformat()})
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     body = response.json()
-    assert body["date"] == DAY.isoformat()
+    assert body["date"] == day.isoformat()
     assert len(body["slots"]) == SLOTS_PER_DAY
-    first = slot(DAY, 0)
+    first = slot(day, 0)
     assert body["slots"][0] == {
         "start": first.start,
         "end": first.end,
@@ -200,8 +204,8 @@ def test_defaults_to_today_in_the_business_time_zone_and_rejects_a_malformed_dat
     assert bad.status_code == 400
 
 
-def test_returns_the_pass_status_for_staff_behind_the_owner_cookie(api: Api, owner: httpx.Client) -> None:
-    booking = api.confirmed(slot(DAY, 0), customer_name=CUSTOMER, bank_code=40072)
+def test_returns_the_pass_status_for_staff_behind_the_owner_cookie(api: Api, owner: httpx.Client, day: date) -> None:
+    booking = api.confirmed(slot(day, 0), customer_name=CUSTOMER, bank_code=40072)
 
     response = owner.get(api.url(f"/verify/{booking.token}"))
     missing = owner.get(api.url(f"/verify/{unknown_token()}"))
@@ -221,10 +225,10 @@ def test_returns_the_pass_status_for_staff_behind_the_owner_cookie(api: Api, own
     assert PROBLEM in missing.headers["content-type"]
 
 
-def test_adds_the_payer_bank_name_to_the_customer_pass_null_when_the_code_is_unknown(api: Api) -> None:
-    known = api.confirmed(slot(DAY, 0), bank_code=40014)
-    unknown = api.confirmed(slot(DAY, 1), phone=OTHER_PHONE, bank_code=12345)
-    none = api.confirmed(slot(DAY, 2), phone=THIRD_PHONE, bank_code=None)
+def test_adds_the_payer_bank_name_to_the_customer_pass_null_when_the_code_is_unknown(api: Api, day: date) -> None:
+    known = api.confirmed(slot(day, 0), bank_code=40014)
+    unknown = api.confirmed(slot(day, 1), phone=OTHER_PHONE, bank_code=12345)
+    none = api.confirmed(slot(day, 2), phone=THIRD_PHONE, bank_code=None)
 
     assert api.view(known.token)["pass"]["bankName"] == "Santander"
     assert api.view(unknown.token)["pass"]["bankName"] is None

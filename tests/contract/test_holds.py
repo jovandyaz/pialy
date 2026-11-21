@@ -2,9 +2,9 @@
 
 import json
 import re
-from datetime import UTC, datetime, timedelta
+from collections.abc import Callable
+from datetime import UTC, date, datetime, timedelta
 from functools import partial
-from typing import Any
 
 import httpx
 import pytest
@@ -23,6 +23,7 @@ from support import (
     Api,
     IpPool,
     Pey,
+    Slot,
     assert_close,
     assert_problem,
     days_ahead,
@@ -32,15 +33,15 @@ from support import (
     new_key,
     parse_iso,
     race,
+    retry_after_seconds,
     slot,
 )
 from targets import Target
 
-SLOT_DAY = days_ahead(1)
-SLOT = slot(SLOT_DAY, 0)
 IP_LIMIT = 10
 PHONE_HOLD_LIMIT = 3
 PHONE_LIMIT_WINDOW_SECONDS = "600"
+LIMIT_WINDOW_SECONDS = 600
 RACE_ROUNDS = 4
 TOKEN_SHAPE = re.compile(r"^[A-Za-z0-9_-]{22,}$")
 
@@ -50,10 +51,10 @@ def race_phone(index: int) -> str:
 
 
 def test_holds_the_slot_sends_one_codi_push_and_stores_only_the_last_4_digits_and_a_hash_of_the_phone(
-    api: Api, pey: Pey
+    api: Api, pey: Pey, first_slot: Slot
 ) -> None:
     """What is stored is not observable; the push pey receives and what the booking shows are."""
-    response = api.hold({"slotStart": SLOT.start, "phone": "55 1234 5678", "customerName": "Cliente"}, new_key())
+    response = api.hold({"slotStart": first_slot.start, "phone": "55 1234 5678", "customerName": "Cliente"}, new_key())
 
     assert response.status_code == 201
     token = response.json()["token"]
@@ -73,31 +74,31 @@ def test_holds_the_slot_sends_one_codi_push_and_stores_only_the_last_4_digits_an
 
 
 @pytest.mark.parametrize(
-    "body",
+    "body_for",
     [
-        {"phone": PHONE},
-        {"slotStart": "mañana", "phone": PHONE},
-        {"slotStart": SLOT.start},
-        {"slotStart": SLOT.start, "phone": PHONE, "amount": 100},
+        lambda at: {"phone": PHONE},
+        lambda at: {"slotStart": "mañana", "phone": PHONE},
+        lambda at: {"slotStart": at.start},
+        lambda at: {"slotStart": at.start, "phone": PHONE, "amount": 100},
     ],
     ids=["no slot", "a slot that is not a date", "no phone", "an amount"],
 )
-def test_answers_400_for_a_body_with(api: Api, body: dict[str, Any]) -> None:
-    response = api.hold(body, new_key())
+def test_answers_400_for_a_body_with(api: Api, first_slot: Slot, body_for: Callable[[Slot], dict[str, object]]) -> None:
+    response = api.hold(body_for(first_slot), new_key())
 
     assert is_problem(response, 400)
 
 
-def test_answers_422_with_the_phone_message_for_a_number_that_is_not_10_digits(api: Api) -> None:
-    response = api.hold({"slotStart": SLOT.start, "phone": "12345"}, new_key())
+def test_answers_422_with_the_phone_message_for_a_number_that_is_not_10_digits(api: Api, first_slot: Slot) -> None:
+    response = api.hold({"slotStart": first_slot.start, "phone": "12345"}, new_key())
 
     assert response.status_code == 422
     assert response.json()["type"] == "urn:pialy:problem:invalid-phone"
     assert response.json()["detail"] == "Revisa tu número: deben ser 10 dígitos"
 
 
-def test_answers_422_for_a_slot_the_business_does_not_offer(api: Api) -> None:
-    off_grid = iso(parse_iso(SLOT.start) + timedelta(minutes=10))
+def test_answers_422_for_a_slot_the_business_does_not_offer(api: Api, first_slot: Slot) -> None:
+    off_grid = iso(parse_iso(first_slot.start) + timedelta(minutes=10))
 
     response = api.hold({"slotStart": off_grid, "phone": PHONE}, new_key())
 
@@ -105,10 +106,10 @@ def test_answers_422_for_a_slot_the_business_does_not_offer(api: Api) -> None:
     assert response.json()["type"] == "urn:pialy:problem:slot-not-offered"
 
 
-def test_answers_409_slottaken_when_the_slot_is_held_by_someone_else(api: Api) -> None:
-    api.book(SLOT)
+def test_answers_409_slottaken_when_the_slot_is_held_by_someone_else(api: Api, first_slot: Slot) -> None:
+    api.book(first_slot)
 
-    response = api.hold({"slotStart": SLOT.start, "phone": OTHER_PHONE}, new_key())
+    response = api.hold({"slotStart": first_slot.start, "phone": OTHER_PHONE}, new_key())
 
     assert is_problem(response, 409)
     assert response.json()["type"] == SLOT_TAKEN_TYPE
@@ -116,28 +117,30 @@ def test_answers_409_slottaken_when_the_slot_is_held_by_someone_else(api: Api) -
 
 
 def test_two_concurrent_holds_of_one_slot_with_different_keys_one_is_held_the_other_gets_slot_taken(
-    api: Api, pey: Pey
+    api: Api, pey: Pey, day: date
 ) -> None:
     """RF2 of hold-slot.test.ts: two phones, two keys, one slot; repeated on several slots."""
     for index in range(RACE_ROUNDS):
-        at = slot(SLOT_DAY, index)
+        at = slot(day, index)
         bodies = [{"slotStart": at.start, "phone": race_phone(2 * index + side)} for side in (0, 1)]
 
         responses = race(*(partial(api.hold, body, new_key()) for body in bodies))
 
         assert sorted(r.status_code for r in responses) == [201, 409], at
         taken = next(r for r in responses if r.status_code == 409)
-        assert is_problem(taken, 409)
-        assert taken.json()["type"] == SLOT_TAKEN_TYPE
+        assert_problem(taken, {"type": SLOT_TAKEN_TYPE, "status": 409}, f"race on {at.start}")
     assert pey.calls("POST", "/codi/pn") == RACE_ROUNDS
 
 
 @pytest.mark.parametrize("pey_status", [500, 400], ids=["RailUnavailableError", "RailRejectedError"])
 def test_on_rail_error_stores_a_502_expires_the_booking_fails_the_attempt_and_frees_the_slot(
-    api: Api, pey: Pey, pey_status: int
+    api: Api, pey: Pey, pey_status: int, day: date, first_slot: Slot
 ) -> None:
+    """A 5xx from pey is ambiguous (it may have charged): reconciliation settles it later, and money that
+    still arrives becomes a late payment. This asserts only that the hold ends and the slot frees, not that
+    nothing was charged."""
     pey.fail_next(pey_status)
-    body = {"slotStart": SLOT.start, "phone": PHONE}
+    body = {"slotStart": first_slot.start, "phone": PHONE}
     key = new_key()
 
     response = api.hold(body, key)
@@ -146,14 +149,14 @@ def test_on_rail_error_stores_a_502_expires_the_booking_fails_the_attempt_and_fr
     assert_problem(response, PUSH_FAILED)
     assert replay.content == response.content
     assert pey.calls("POST", "/codi/pn") == 1
-    slots = api.client.get(api.url("/slots"), params={"date": SLOT_DAY.isoformat()}).json()["slots"]
+    slots = api.client.get(api.url("/slots"), params={"date": day.isoformat()}).json()["slots"]
     assert slots[0]["state"] == "free"
     assert api.hold(body, new_key()).status_code == 201
 
 
 def assert_ip_limited(response: httpx.Response) -> None:
     assert is_problem(response, 429)
-    assert "retry-after" in response.headers
+    assert 0 < retry_after_seconds(response) <= LIMIT_WINDOW_SECONDS
     assert response.json()["status"] == 429
     assert response.json()["detail"] == TOO_MANY_ATTEMPTS
 
@@ -211,22 +214,22 @@ def test_falls_back_to_the_request_address_when_x_real_ip_is_not_an_ip(
 
 
 def test_answers_429_to_the_4th_hold_for_one_phone_within_10_minutes_replaying_a_key_does_not_count(
-    api: Api, pey: Pey
+    api: Api, pey: Pey, first_slot: Slot
 ) -> None:
     pey.fail_next(500, times=PHONE_HOLD_LIMIT)
-    body = {"slotStart": SLOT.start, "phone": PHONE}
+    body = {"slotStart": first_slot.start, "phone": PHONE}
     keys = [new_key() for _ in range(PHONE_HOLD_LIMIT)]
     assert [api.hold(body, key).status_code for key in keys] == [502] * PHONE_HOLD_LIMIT
 
     replay = api.hold(body, keys[-1])
-    fourth = api.hold({"slotStart": SLOT.start, "phone": "55-1234-5678"}, new_key())
+    fourth = api.hold({"slotStart": first_slot.start, "phone": "55-1234-5678"}, new_key())
 
     assert replay.status_code == 502
     assert is_problem(fourth, 429)
     assert fourth.headers["retry-after"] == PHONE_LIMIT_WINDOW_SECONDS
     assert fourth.json()["type"] == "urn:pialy:problem:phone-rate-limited"
     assert fourth.json()["detail"] == "Demasiados intentos con este número"
-    assert api.hold({"slotStart": SLOT.start, "phone": OTHER_PHONE}, new_key()).status_code == 201
+    assert api.hold({"slotStart": first_slot.start, "phone": OTHER_PHONE}, new_key()).status_code == 201
 
 
 def test_answers_409_to_a_second_concurrent_hold_for_the_same_phone_then_allows_one_after_the_first_expires(
@@ -243,17 +246,19 @@ def test_answers_409_to_a_second_concurrent_hold_for_the_same_phone_then_allows_
     assert conflict.json()["detail"] == "Ya tienes un apartado en curso"
 
 
-def test_never_logs_the_phone_when_pey_rejects_the_push_with_a_message_that_echoes_it(api: Api, pey: Pey) -> None:
+def test_never_logs_the_phone_when_pey_rejects_the_push_with_a_message_that_echoes_it(
+    api: Api, pey: Pey, first_slot: Slot
+) -> None:
     """The log half of the TS test is not observable from outside; a 4xx from pey still ends in 502."""
     pey.fail_next(400)
 
-    response = api.hold({"slotStart": SLOT.start, "phone": PHONE}, new_key())
+    response = api.hold({"slotStart": first_slot.start, "phone": PHONE}, new_key())
 
     assert_problem(response, PUSH_FAILED)
 
 
-def test_shows_a_held_booking_without_phone_data(api: Api) -> None:
-    held = api.hold({"slotStart": SLOT.start, "phone": PHONE, "customerName": "Cliente"}, new_key()).json()
+def test_shows_a_held_booking_without_phone_data(api: Api, first_slot: Slot) -> None:
+    held = api.hold({"slotStart": first_slot.start, "phone": PHONE, "customerName": "Cliente"}, new_key()).json()
 
     response = api.client.get(api.url(f"/bookings/{held['token']}"))
 
@@ -262,7 +267,7 @@ def test_shows_a_held_booking_without_phone_data(api: Api) -> None:
         "token": held["token"],
         "status": "holding",
         "late": False,
-        "slot": {"start": SLOT.start, "end": SLOT.end},
+        "slot": {"start": first_slot.start, "end": first_slot.end},
         "holdExpiresAt": held["holdExpiresAt"],
         "attempts": [{"mode": "push", "status": "awaiting"}],
     }
@@ -270,8 +275,8 @@ def test_shows_a_held_booking_without_phone_data(api: Api) -> None:
     assert PHONE not in response.text
 
 
-def test_adds_the_pass_once_the_payment_confirmed_the_booking(api: Api, pey: Pey) -> None:
-    booking = api.book(SLOT)
+def test_adds_the_pass_once_the_payment_confirmed_the_booking(api: Api, pey: Pey, first_slot: Slot) -> None:
+    booking = api.book(first_slot)
     paid = pey.pay(booking.push_ref)
 
     view = api.view(booking.token)
@@ -279,7 +284,7 @@ def test_adds_the_pass_once_the_payment_confirmed_the_booking(api: Api, pey: Pey
     assert view["status"] == "confirmed"
     assert view["attempts"] == [{"mode": "push", "status": "succeeded"}]
     assert view["pass"] == {
-        "time": SLOT.start,
+        "time": first_slot.start,
         "phoneLast4": PHONE[-4:],
         "bankName": DEFAULT_BANK_NAME,
         "trackingKey": paid["tracking_key"],

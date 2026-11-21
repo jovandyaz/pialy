@@ -1,5 +1,6 @@
 import os
 from collections.abc import Iterator
+from datetime import date
 
 import httpx
 import pytest
@@ -7,18 +8,20 @@ import pytest
 # Before the import: only test modules and conftest files get assertion rewriting by default.
 pytest.register_assert_rewrite("support")
 
-from support import REQUEST_TIMEOUT_SECONDS, Api, IpPool, Pey, new_client  # noqa: E402
+from support import REQUEST_TIMEOUT_SECONDS, Api, IpPool, Pey, Slot, days_ahead, new_client, slot  # noqa: E402
 from targets import Target, target_from_env, target_name  # noqa: E402
 
 ONLY_MARKERS = {"ts_only": "ts", "py_only": "py"}
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
-    name = target_name()
     for item in items:
         for marker, only in ONLY_MARKERS.items():
-            if item.get_closest_marker(marker) and name != only:
-                item.add_marker(pytest.mark.skip(reason=f"login-specific case of CONTRACT_TARGET={only}"))
+            # Resolved only for marked tests, so the fake's own tests run without CONTRACT_TARGET.
+            found = item.get_closest_marker(marker)
+            if found and target_name() != only:
+                why = found.kwargs.get("reason", "login-specific case")
+                item.add_marker(pytest.mark.skip(reason=f"CONTRACT_TARGET={only} only: {why}"))
 
 
 @pytest.fixture(scope="session")
@@ -80,3 +83,15 @@ def owner(base_url: str, ips: IpPool, target: Target) -> Iterator[httpx.Client]:
 @pytest.fixture
 def api(client: httpx.Client, target: Target, pey: Pey) -> Api:
     return Api(client, target, pey)
+
+
+@pytest.fixture
+def day() -> date:
+    """Tomorrow in the business's time zone, taken when the test starts, so a run past midnight stays right."""
+    return days_ahead(1)
+
+
+@pytest.fixture
+def first_slot(day: date) -> Slot:
+    """The first slot `day` offers."""
+    return slot(day, 0)

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Runs the contract suite against a fresh TS server: test Postgres (54329), fake pey and the built
 # server, with throwaway secrets generated for this run only. Extra arguments go to pytest.
+# RUN_DIR keeps the logs (default: a new temporary directory); the secret never goes there.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -8,13 +9,15 @@ root=$(cd "$here/../.." && pwd)
 server_port=${SERVER_PORT:-3000}
 pey_port=${FAKE_PEY_PORT:-4010}
 database_url=postgres://postgres:postgres@localhost:54329/pialy_test
-run_dir=$(mktemp -d)
+run_dir=${RUN_DIR:-$(mktemp -d)}
+mkdir -p "$run_dir"
+secret_dir=$(mktemp -d)
 pids=()
 
 cleanup() {
   for pid in ${pids[@]+"${pids[@]}"}; do kill "$pid" 2>/dev/null || true; done
   wait 2>/dev/null || true
-  rm -f "$run_dir/pey-secret"
+  rm -rf "$secret_dir"
   echo "logs: $run_dir"
 }
 trap cleanup EXIT
@@ -32,9 +35,9 @@ pnpm --dir "$root" --filter @pialy/server build
 
 webhook_secret="whsec_$(openssl rand -base64 32)"
 pin=$(($(od -An -N4 -tu4 /dev/urandom) % 900000 + 100000))
-(umask 077 && printf '%s' "$webhook_secret" >"$run_dir/pey-secret")
+(umask 077 && printf '%s' "$webhook_secret" >"$secret_dir/pey-secret")
 
-(cd "$here" && exec uv run python -m fake_pey --port "$pey_port" --secret-file "$run_dir/pey-secret") \
+(cd "$here" && exec uv run python -m fake_pey --port "$pey_port" --secret-file "$secret_dir/pey-secret") \
   >"$run_dir/fake-pey.log" 2>&1 &
 pids+=($!)
 

@@ -20,8 +20,8 @@ pythonpath = ["."]
 testpaths = ["."]
 strict_markers = true
 markers = [
-    "ts_only: login case that exists only on the TS server (PIN session)",
-    "py_only: login case that exists only on the Python server (account session)",
+    "ts_only(reason): behavior only the TS server has (by default its PIN session)",
+    "py_only(reason): behavior only the Python server has (by default its account session)",
 ]
 
 [tool.ruff]

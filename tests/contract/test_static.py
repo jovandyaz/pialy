@@ -5,13 +5,13 @@ from pathlib import Path
 import httpx
 import pytest
 
-from support import PROBLEM, assert_problem
+from support import PROBLEM, Problem, assert_problem
 from targets import Target
 
 WEB_ROOT = Path(__file__).parent / "web_root"
 INDEX = (WEB_ROOT / "index.html").read_text()
 IMMUTABLE = "public, max-age=31536000, immutable"
-NOT_FOUND = {"type": "about:blank", "title": "Not Found", "status": 404}
+NOT_FOUND: Problem = {"type": "about:blank", "title": "Not Found", "status": 404}
 
 
 def test_serves_index_html_at_without_caching(client: httpx.Client) -> None:
@@ -63,7 +63,7 @@ def test_falls_back_to_the_plain_asset_when_the_client_accepts_no_encoding(clien
 def test_keeps_problem_json_404_for_unknown_api_paths_and_missing_files(client: httpx.Client) -> None:
     for path in ["/api/nope", "/api", "/api?x=1", "/api/", "/assets/missing.js"]:
         response = client.get(path)
-        assert_problem(response, NOT_FOUND)
+        assert_problem(response, NOT_FOUND, path)
 
 
 def test_answers_head_on_client_routes_like_get_without_a_body(client: httpx.Client) -> None:

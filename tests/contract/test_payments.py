@@ -1,6 +1,7 @@
 """Payments through the webhook: QR payments, double payments and races between deliveries."""
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from functools import partial
 from typing import Literal
 
@@ -16,38 +17,38 @@ from support import (
     Booking,
     Json,
     Pey,
-    days_ahead,
+    Slot,
     event_stream,
     money,
     new_key,
     outcome,
     pn_webhook,
     race,
-    slot,
 )
 
-SLOT_DAY = days_ahead(1)
-SLOT = slot(SLOT_DAY, 0)
 BOOKING_CONFIRMED = {"type": "booking.updated", "status": "confirmed"}
 FLAG_RAISED_BLOCK = 'data: {"type":"flag.raised"}'
 
 
-def failed_hold(api: Api, pey: Pey, phone: str = PHONE) -> str:
-    """Holds SLOT while pey fails the push (the hold ends at once) and returns the attempt id it sent."""
+def failed_hold(api: Api, pey: Pey, at: Slot, phone: str = PHONE) -> str:
+    """Holds `at` while pey fails the push and returns the attempt id it sent.
+
+    The 5xx is ambiguous, so the hold ends at once and money that still arrives is a late payment.
+    """
     pey.fail_next(500)
-    assert api.hold({"slotStart": SLOT.start, "phone": phone}, new_key()).status_code == 502
+    assert api.hold({"slotStart": at.start, "phone": phone}, new_key()).status_code == 502
     return pey.last_push_attempt_id()
 
 
 def test_answers_201_when_the_push_call_failed_but_its_payment_already_confirmed_the_booking(
-    api: Api, pey: Pey
+    api: Api, pey: Pey, first_slot: Slot
 ) -> None:
     """The money arrives while the push call is open and the call then fails: the paid hold stands."""
     pey.fail_next(500)
     pey.stall_next()
 
     with ThreadPoolExecutor(max_workers=1) as pool:
-        pending = pool.submit(api.hold, {"slotStart": SLOT.start, "phone": PHONE}, new_key())
+        pending = pool.submit(api.hold, {"slotStart": first_slot.start, "phone": PHONE}, new_key())
         [push_call] = pey.wait_for("POST", "/codi/pn")
         attempt_id = push_call["body"]["metadata"]["attemptId"]
         paid = pey.deliver(pn_webhook(new_transaction_id(), attempt_id=attempt_id))
@@ -62,9 +63,9 @@ def test_answers_201_when_the_push_call_failed_but_its_payment_already_confirmed
 
 
 def test_confirms_a_held_booking_when_its_payment_arrives_on_time_and_notifies_board_and_booking(
-    api: Api, pey: Pey, owner: httpx.Client
+    api: Api, pey: Pey, owner: httpx.Client, first_slot: Slot
 ) -> None:
-    booking = api.book(SLOT)
+    booking = api.book(first_slot)
 
     with (
         event_stream(api.client, api.url(f"/bookings/{booking.token}/events")) as page,
@@ -78,24 +79,26 @@ def test_confirms_a_held_booking_when_its_payment_arrives_on_time_and_notifies_b
     assert (view["status"], view["late"]) == ("confirmed", False)
 
 
-def test_confirms_a_late_payment_as_late_when_the_slot_is_still_free(api: Api, pey: Pey, owner: httpx.Client) -> None:
+def test_confirms_a_late_payment_as_late_when_the_slot_is_still_free(
+    api: Api, pey: Pey, owner: httpx.Client, day: date, first_slot: Slot
+) -> None:
     """A failed push ends the hold at once, so money for it arrives late without moving the clock."""
-    attempt_id = failed_hold(api, pey)
+    attempt_id = failed_hold(api, pey, first_slot)
 
     delivered = pey.deliver(pn_webhook(new_transaction_id(), attempt_id=attempt_id))
 
     assert outcome(delivered) == "applied"
-    booking = api.board(owner, SLOT_DAY)["slots"][0]["booking"]
+    booking = api.board(owner, day)["slots"][0]["booking"]
     assert (booking["status"], booking["late"]) == ("confirmed", True)
     assert api.view(booking["token"])["late"] is True
     assert api.flags(owner) == []
 
 
 def test_flags_refund_due_for_a_late_payment_whose_slot_was_taken_and_still_records_the_money(
-    api: Api, pey: Pey, owner: httpx.Client
+    api: Api, pey: Pey, owner: httpx.Client, day: date, first_slot: Slot
 ) -> None:
-    attempt_id = failed_hold(api, pey)
-    taker = api.book(SLOT, phone=OTHER_PHONE)
+    attempt_id = failed_hold(api, pey, first_slot)
+    taker = api.book(first_slot, phone=OTHER_PHONE)
 
     delivered = pey.deliver(pn_webhook(new_transaction_id(), attempt_id=attempt_id))
 
@@ -103,13 +106,15 @@ def test_flags_refund_due_for_a_late_payment_whose_slot_was_taken_and_still_reco
     [flag] = api.flags(owner)
     assert (flag["kind"], flag["reason"]) == ("refund_due", "slot_taken")
     assert flag["amount"] == money()
-    assert (flag["booking"]["phoneLast4"], flag["booking"]["slotStart"]) == (PHONE[-4:], SLOT.start)
+    assert (flag["booking"]["phoneLast4"], flag["booking"]["slotStart"]) == (PHONE[-4:], first_slot.start)
     assert api.view(taker.token)["status"] == "holding"
-    assert api.board(owner, SLOT_DAY)["slots"][0]["booking"]["token"] == taker.token
+    assert api.board(owner, day)["slots"][0]["booking"]["token"] == taker.token
 
 
-def test_flags_refund_due_for_a_second_payment_of_a_confirmed_booking(api: Api, pey: Pey, owner: httpx.Client) -> None:
-    booking = api.confirmed(SLOT)
+def test_flags_refund_due_for_a_second_payment_of_a_confirmed_booking(
+    api: Api, pey: Pey, owner: httpx.Client, first_slot: Slot
+) -> None:
+    booking = api.confirmed(first_slot)
 
     second = pey.deliver(pn_webhook(new_transaction_id(), attempt_id=pey.last_push_attempt_id()))
 
@@ -131,9 +136,9 @@ def test_keeps_flagging_unmatched_payments_and_tells_the_board_without_any_custo
 
 
 def test_tells_the_board_about_an_amount_mismatch_while_the_booking_keeps_holding(
-    api: Api, pey: Pey, owner: httpx.Client
+    api: Api, pey: Pey, owner: httpx.Client, first_slot: Slot
 ) -> None:
-    booking = api.book(SLOT)
+    booking = api.book(first_slot)
 
     with event_stream(owner, api.url("/board/events")) as board:
         assert outcome(pey.pay(booking.push_ref, amount=2)) == "unmatched"
@@ -145,9 +150,9 @@ def test_tells_the_board_about_an_amount_mismatch_while_the_booking_keeps_holdin
 
 
 def test_confirms_the_booking_from_a_codi_qr_payment_received_webhook_matched_by_codiqrid_alone(
-    api: Api, pey: Pey, owner: httpx.Client
+    api: Api, pey: Pey, owner: httpx.Client, first_slot: Slot
 ) -> None:
-    booking = api.book(SLOT)
+    booking = api.book(first_slot)
     qr_id = api.qr(booking.token)
 
     paid = pey.pay(qr_id, external_metadata={})
@@ -167,9 +172,14 @@ def pay_through(pey: Pey, booking: Booking, qr_id: str, kind: Literal["push", "q
 
 @pytest.mark.parametrize(("first_kind", "second_kind"), [("push", "qr"), ("qr", "push")])
 def test_when_first_and_then_second_are_both_paid_the_second_payment_is_recorded_and_flagged_refund_due(
-    api: Api, pey: Pey, owner: httpx.Client, first_kind: Literal["push", "qr"], second_kind: Literal["push", "qr"]
+    api: Api,
+    pey: Pey,
+    owner: httpx.Client,
+    first_kind: Literal["push", "qr"],
+    second_kind: Literal["push", "qr"],
+    first_slot: Slot,
 ) -> None:
-    booking = api.book(SLOT)
+    booking = api.book(first_slot)
     qr_id = api.qr(booking.token)
 
     first = pay_through(pey, booking, qr_id, first_kind)
@@ -188,9 +198,9 @@ def test_when_first_and_then_second_are_both_paid_the_second_payment_is_recorded
 
 
 def test_confirms_once_and_reports_the_other_as_a_second_payment_when_two_payments_for_one_intent_race(
-    api: Api, pey: Pey, owner: httpx.Client
+    api: Api, pey: Pey, owner: httpx.Client, first_slot: Slot
 ) -> None:
-    booking = api.book(SLOT)
+    booking = api.book(first_slot)
     qr_id = api.qr(booking.token)
 
     deliveries = race(partial(pey.pay, booking.push_ref), partial(pey.pay, qr_id))
