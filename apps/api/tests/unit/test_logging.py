@@ -273,6 +273,40 @@ def test_digit_chains_of_15_or_more_digits_are_redacted_whole(text: str, expecte
     assert redact(text) == expected
 
 
+@pytest.mark.parametrize(
+    "account",
+    [
+        "4111  1111  1111  1111",  # double spaces
+        "4111,1111,1111,1111",
+        "4111, 1111, 1111, 1111",
+        "4111\t1111\t1111\t1111",
+        "4111\xa01111\xa01111\xa01111",  # no-break space
+        "0121\xa08001\xa02345\xa06789\xa012",
+        "4111\u202f1111\u202f1111\u202f1111",  # narrow no-break space
+        "0121/8001/2345/6789/12",
+        "0121_8001_2345_6789_12",
+        "4111 - 1111 - 1111 - 1111",
+        "0121 . 8001 . 2345 . 6789 . 12",
+    ],
+    ids=[
+        "double_space",
+        "comma",
+        "comma_space",
+        "tab",
+        "nbsp",
+        "clabe_nbsp",
+        "narrow_nbsp",
+        "slash",
+        "underscore",
+        "space_dash_space",
+        "space_dot_space",
+    ],
+)
+def test_account_and_card_numbers_with_any_common_separator_are_redacted(account: str) -> None:
+    assert redact(f"pay {account} now") == "pay [digits] now"
+    assert redact(f"{account}!") == "[digits]!"
+
+
 def test_spaced_account_next_to_a_phone_redacts_both() -> None:
     assert (
         redact("call 55 1234 5678 or pay 0121 8001 2345 6789 12") == "call [digits] or pay [digits]"
@@ -290,6 +324,12 @@ def test_spaced_account_next_to_a_phone_redacts_both() -> None:
         "range 2026-11-15 2026-11-16",
         "range 2026-11-15-2026-11-16",
         "days 2026-11-15 2026-11-16 2026-11-17 2026-11-18",
+        "days 2026-11-15, 2026-11-16, 2026-11-17",
+        "amount 12,345,678.90 paid",  # 10 digits
+        "amount 1,234,567.89 and 1,234.50",
+        "at 2026-11-21 01:48:00,123 INFO",
+        "p50=1234 p95=5678 p99=9012",
+        "1,234,567,890,123 bytes",  # 13 digits
         "ip 192.168.100.200",
         "version 1.2.3.4.5",
         "build 20261121-0148",
@@ -328,6 +368,14 @@ ADVERSARIAL_INPUTS = {
     "spaced_digits": "1 " * 50_000,
     "dashed_digits": "1-" * 50_000,
     "dotted_digits": "1." * 50_000,
+    "tab_digits": "1\t" * 50_000,
+    "nbsp_digits": "1\xa0" * 50_000,
+    "comma_digits": "1, " * 33_333,
+    "double_space_digits": "1  " * 33_333,
+    "slash_digits": "1/" * 50_000,
+    "underscore_digits": "1_" * 50_000,
+    "mixed_separators_digits": ("1" + " .,") * 25_000,
+    "too_wide_separators": "1    " * 20_000,
     "date_chain": "2026-11-15 " * 9_000,
     "date_chain_with_tail": "2026-11-15 " * 9_000 + "1",
     "path_prefixes": "/c/" * 33_333,
