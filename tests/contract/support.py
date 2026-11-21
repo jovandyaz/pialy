@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 import httpx
 import pytest
 
-from fake_pey.server import DEFAULT_BANK_CODE, Charge, Payment, webhook_body
+from fake_pey.server import CURRENCY, DEFAULT_BANK_CODE, Charge, Payment, webhook_body
 from targets import Target
 
 type Json = dict[str, Any]
@@ -34,6 +34,9 @@ SERVICE_MINUTES = 45
 SLOTS_PER_DAY = 14
 BUSINESS_NAME = "Estudio Demo"
 DEPOSIT_MINOR = 1
+DEPOSIT_PESOS = 0.01
+DEPOSIT_CONCEPT = f"Anticipo {BUSINESS_NAME}"
+DEFAULT_BANK_NAME = "BBVA"
 HOLD_SECONDS = 360
 PROBLEM = "application/problem+json"
 PHONE = "5512345678"
@@ -44,6 +47,9 @@ UNKNOWN_TX = "01UNKNOWNTX000000000000000"
 UNMATCHED_TRACKING_KEY = "0000000001"
 TOO_MANY_ATTEMPTS = "Demasiados intentos. Espera unos minutos."
 HOLDING_BLOCK = 'data: {"type":"booking.updated","status":"holding"}'
+SLOT_TAKEN_TYPE = "urn:pialy:problem:slot-taken"
+KEY_REUSED_TYPE = "urn:pialy:problem:idempotency-key-reused"
+IN_PROGRESS_TYPE = "urn:pialy:problem:request-in-progress"
 PUSH_FAILED = {
     "type": "urn:pialy:problem:push-failed",
     "title": "Bad Gateway",
@@ -110,6 +116,11 @@ def slot_today() -> Slot:
 def assert_close(text: str, expected: datetime, tolerance: timedelta = CLOCK_SKEW) -> None:
     actual = parse_iso(text)
     assert abs(actual - expected) <= tolerance, f"{text} is not within {tolerance} of {iso(expected)}"
+
+
+def money(amount_minor: int = DEPOSIT_MINOR) -> Json:
+    """An amount as the API writes it."""
+    return {"amountMinor": amount_minor, "currency": CURRENCY}
 
 
 def new_key() -> str:
@@ -248,7 +259,7 @@ def pn_webhook(transaction_id: str, attempt_id: str | None = None, **fields: Any
     """A push payment webhook built the way the fake builds its own, for money no charge of the fake asked for."""
     now = int(time.time())
     external: Json = {} if attempt_id is None else {"attemptId": attempt_id}
-    charge = Charge("pn", transaction_id, f"Anticipo {BUSINESS_NAME}", "1", external, HOLD_SECONDS, now)
+    charge = Charge("pn", transaction_id, DEPOSIT_CONCEPT, "1", external, HOLD_SECONDS, now)
     payment = Payment(transaction_id, charge, DEPOSIT_MINOR, 0, now, UNMATCHED_TRACKING_KEY, DEFAULT_BANK_CODE)
     return webhook_body(payment, external) | fields
 

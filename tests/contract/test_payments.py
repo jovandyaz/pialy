@@ -18,6 +18,7 @@ from support import (
     Pey,
     days_ahead,
     event_stream,
+    money,
     new_key,
     outcome,
     pn_webhook,
@@ -101,7 +102,7 @@ def test_flags_refund_due_for_a_late_payment_whose_slot_was_taken_and_still_reco
     assert outcome(delivered) == "applied"
     [flag] = api.flags(owner)
     assert (flag["kind"], flag["reason"]) == ("refund_due", "slot_taken")
-    assert flag["amount"] == {"amountMinor": 1, "currency": "MXN"}
+    assert flag["amount"] == money()
     assert (flag["booking"]["phoneLast4"], flag["booking"]["slotStart"]) == (PHONE[-4:], SLOT.start)
     assert api.view(taker.token)["status"] == "holding"
     assert api.board(owner, SLOT_DAY)["slots"][0]["booking"]["token"] == taker.token

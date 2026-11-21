@@ -8,7 +8,7 @@ on the backend.
 
 ```
 conftest.py      fixtures: target, anonymous client, signed-in owner client, fake pey control
-targets.py       Target protocol, TsTarget, PyTarget (prefix, webhook path, health body, login, reset_db)
+targets.py       Target protocol, TsTarget, PyTarget (routes, health and readiness, login, reset_db)
 support.py       the seeded business's calendar, booking helpers, races, fake pey control, SSE reader
 fake_pey/        the fake pey server (stdlib ThreadingHTTPServer)
 web_root/        the SPA build the target serves for test_static.py
@@ -77,7 +77,8 @@ later today and are skipped from 18:40 Mexico City, when no slot is left.
 
 ## Python target
 
-`CONTRACT_TARGET=py` with the variables above, against the app seeded by `pialy seed` (Task 18).
+`CONTRACT_TARGET=py` with the variables above, against the app seeded by `pialy seed` (Task 18 of
+`docs/superpowers/plans/2026-11-20-pialy-0-foundation.md`).
 `PyTarget.reset_db` truncates the same tables as TS plus `rate_limits`; confirm that list against the
 Python schema when it lands. Cases about the login itself are marked `ts_only` (PIN session) or
 `py_only` (account session) and skipped on the other target.
@@ -116,8 +117,10 @@ Control endpoints (amounts in integer centavos):
 
 `pay` and `deliver` answer `{delivery: {url, headers, body}, response: {status, content_type, body}}`
 (`pay` adds `transaction_id`, `tracking_key`, `date_paid`); with `"send": false` the signed delivery
-is returned without posting it, for a test to tamper with or post itself. A delivery the target
-never answers (refused, reset or timed out) makes the control call answer 502.
+is returned without posting it, for a test to tamper with or post itself. A delivery that fails in
+transport (connection refused or reset, a response cut short, no answer within 10 s) makes the
+control call answer 502. For `pay` the payment stays recorded: pey reports it `PAID`, paying the same
+push again is a 409, and `/_control/deliver` can resend its webhook.
 
 `late` only moves the payment's `datePaid` to one second after the charge's expiry. While the hold
 lasts that instant is still in the future on the real clock, so `late` is meaningful only against a
@@ -126,10 +129,10 @@ target whose clock was moved past the expiry; no test here uses it.
 ## Not covered here
 
 Cases of `apps/server/test` that need control of the clock are ported in process with an injected
-clock (Task 15). One case is left out by name: `board.test.ts:115`, the cap of 20 wrong PINs across
-all IPs. Tripping it locks the owner out of the shared server for the rest of the 10-minute window
-(every later login case would fail), and its second half, the lockout lifting when the window passes,
-needs the clock.
+clock (Task 15 of `docs/superpowers/plans/2026-11-20-pialy-0-foundation.md`). One case is left out
+by name: `board.test.ts:115`, the cap of 20 wrong PINs across all IPs. Tripping it locks the owner
+out of the shared server for the rest of the 10-minute window (every later login case would fail),
+and its second half, the lockout lifting when the window passes, needs the clock.
 
 Also left out: unit tests of internals (the SSE hub, the outbox relay, the unit of work), assertions
 on server logs or on stored rows that no route exposes, states no route can reach (`expired` with a

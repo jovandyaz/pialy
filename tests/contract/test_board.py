@@ -8,6 +8,7 @@ import pytest
 from fake_pey.server import SYNTHETIC_CLABE
 from support import (
     CUSTOMER,
+    DEFAULT_BANK_NAME,
     OTHER_PHONE,
     PHONE,
     PROBLEM,
@@ -139,7 +140,7 @@ def test_lists_the_day_with_each_booking_as_name_last_4_and_bank_name_and_never_
             "slotStart": first.start,
             "customerName": CUSTOMER,
             "phoneLast4": PHONE[-4:],
-            "bankName": "BBVA",
+            "bankName": DEFAULT_BANK_NAME,
             "checkedInAt": None,
         },
     }
@@ -181,7 +182,7 @@ def test_lists_bookings_paid_in_the_last_15_minutes_for_any_day_with_only_what_t
             "token": latest.token,
             "slotStart": latest.slot.start,
             "customerName": CUSTOMER,
-            "bankName": "BBVA",
+            "bankName": DEFAULT_BANK_NAME,
             "confirmedAt": iso_from_epoch(latest_paid["date_paid"]),
         },
     ]

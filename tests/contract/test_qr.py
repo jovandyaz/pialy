@@ -8,8 +8,11 @@ import httpx
 import pytest
 
 from support import (
-    BUSINESS_NAME,
+    DEPOSIT_CONCEPT,
+    DEPOSIT_PESOS,
     HOLD_SECONDS,
+    IN_PROGRESS_TYPE,
+    KEY_REUSED_TYPE,
     OTHER_PHONE,
     PHONE,
     PROBLEM,
@@ -57,8 +60,8 @@ def test_creates_a_codi_qr_attempt_next_to_the_awaiting_push_and_extends_the_hol
     assert_close(body["expiresAt"], datetime.now(UTC) + timedelta(seconds=HOLD_SECONDS))
     [push_call] = pey.requests("POST", "/codi/pn")
     assert qr_call["body"] == {
-        "amount": 0.01,
-        "concept": f"Anticipo {BUSINESS_NAME}",
+        "amount": DEPOSIT_PESOS,
+        "concept": DEPOSIT_CONCEPT,
         "expiration": HOLD_SECONDS,
         "numRef": push_call["body"]["numRef"],
         "metadata": {
@@ -96,7 +99,7 @@ def test_answers_422_when_the_key_was_already_used_for_another_booking(api: Api)
     response = api.post_qr(other.token, key)
 
     assert response.status_code == 422
-    assert response.json()["type"] == "urn:pialy:problem:idempotency-key-reused"
+    assert response.json()["type"] == KEY_REUSED_TYPE
     assert len(api.view(other.token)["attempts"]) == 1
 
 
@@ -241,7 +244,7 @@ def test_answers_409_solicitud_en_proceso_while_the_same_key_is_in_flight(api: A
     third = api.post_qr(booking.token, key)
 
     assert second.status_code == 409
-    assert second.json()["type"] == "urn:pialy:problem:request-in-progress"
+    assert second.json()["type"] == IN_PROGRESS_TYPE
     assert first.status_code == 201
     assert third.content == first.content
     assert pey.calls("POST", "/codi/qr") == 1

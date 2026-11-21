@@ -7,11 +7,12 @@ from targets import Target
 
 
 def test_reports_ok_with_a_reachable_database(client: httpx.Client, target: Target) -> None:
-    response = client.get("/healthz")
+    response = client.get(target.readiness_path())
 
     assert response.status_code == 200
     assert "application/json" in response.headers["content-type"]
-    assert response.json() == target.health_body()
+    expected, body = target.readiness_body(), response.json()
+    assert expected is None or body == expected, body
 
 
 def test_sets_security_headers(client: httpx.Client) -> None:

@@ -38,7 +38,15 @@ class Target(Protocol):
     def webhook_path(self) -> str: ...
 
     def health_body(self) -> dict[str, object]:
-        """What `GET /healthz` answers while the service and its database are up."""
+        """What `GET /healthz` answers while the service runs."""
+        ...
+
+    def readiness_path(self) -> str:
+        """The route that answers 200 only while the database is reachable."""
+        ...
+
+    def readiness_body(self) -> dict[str, object] | None:
+        """Its exact 200 body, or None where the contract fixes only a 200 JSON answer."""
         ...
 
     def login(self, client: httpx.Client) -> None:
@@ -62,6 +70,12 @@ class TsTarget:
 
     def health_body(self) -> dict[str, object]:
         return {"ok": True, "db": True}
+
+    def readiness_path(self) -> str:
+        return "/healthz"
+
+    def readiness_body(self) -> dict[str, object] | None:
+        return self.health_body()
 
     def login(self, client: httpx.Client) -> None:
         client.post("/api/session", json={"pin": self.pin}).raise_for_status()
@@ -87,6 +101,12 @@ class PyTarget:
 
     def health_body(self) -> dict[str, object]:
         return {"status": "ok"}
+
+    def readiness_path(self) -> str:
+        return "/readyz"
+
+    def readiness_body(self) -> dict[str, object] | None:
+        return None
 
     def login(self, client: httpx.Client) -> None:
         credentials = {"email": self.owner_email, "password": self.owner_password}

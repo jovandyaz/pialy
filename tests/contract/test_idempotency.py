@@ -7,6 +7,8 @@ import pytest
 
 from support import (
     HOLD_SECONDS,
+    IN_PROGRESS_TYPE,
+    KEY_REUSED_TYPE,
     OTHER_PHONE,
     PHONE,
     PUSH_FAILED,
@@ -73,7 +75,7 @@ def test_answers_422_when_the_key_is_reused_with_another_request(api: Api) -> No
     response = api.hold({"slotStart": slot(days_ahead(1), 1).start, "phone": PHONE}, key)
 
     assert response.status_code == 422
-    assert response.json()["type"] == "urn:pialy:problem:idempotency-key-reused"
+    assert response.json()["type"] == KEY_REUSED_TYPE
 
 
 def test_rejects_the_same_key_with_a_different_request_and_leaves_the_first_hold_alone(api: Api, pey: Pey) -> None:
@@ -83,7 +85,7 @@ def test_rejects_the_same_key_with_a_different_request_and_leaves_the_first_hold
     response = api.hold({"slotStart": SLOT.start, "phone": OTHER_PHONE}, key)
 
     assert response.status_code == 422
-    assert response.json()["type"] == "urn:pialy:problem:idempotency-key-reused"
+    assert response.json()["type"] == KEY_REUSED_TYPE
     assert pey.calls("POST", "/codi/pn") == 1
     assert api.view(first.json()["token"])["status"] == "holding"
 
@@ -102,7 +104,7 @@ def test_answers_409_solicitud_en_proceso_while_the_same_key_is_in_flight(api: A
     replay = api.hold(body, key)
 
     assert second.status_code == 409
-    assert second.json()["type"] == "urn:pialy:problem:request-in-progress"
+    assert second.json()["type"] == IN_PROGRESS_TYPE
     assert second.json()["detail"] == "Solicitud en proceso"
     assert first.status_code == 201
     assert replay.content == first.content

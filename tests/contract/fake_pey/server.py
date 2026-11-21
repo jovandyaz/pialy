@@ -6,6 +6,7 @@ the Standard Webhooks way with the secret in `--secret-file`. Endpoints are list
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import secrets
@@ -28,6 +29,7 @@ type Json = dict[str, Any]
 type ChargeKind = Literal["pn", "qr"]
 
 SYNTHETIC_CLABE = "123456789012345678"
+CURRENCY = "MXN"
 DEFAULT_BANK_CODE = 40012
 CODI_ACCOUNT_TYPE = 40
 API_KEY_ID = "01FAKEPEYAPIKEY00000000000"
@@ -36,7 +38,8 @@ CODI_ID_DIGITS = 20
 TRACKING_KEY_DIGITS = 10
 QR_ID_BYTES = 5
 STALL_LIMIT_SECONDS = 30.0
-DELIVERY_TIMEOUT_SECONDS = 30.0
+# Below the suite's 15 s request timeout, so a hung target answers 502 before the control call gives up.
+DELIVERY_TIMEOUT_SECONDS = 10.0
 MAX_BODY_BYTES = 1_000_000
 CENTAVOS_PER_PESO = 100
 MAX_HTTP_STATUS = 599
@@ -158,14 +161,19 @@ class FakePey:
         missing = [name for name in required if name not in body]
         if missing:
             return HTTPStatus.BAD_REQUEST, pey_error(HTTPStatus.BAD_REQUEST, f"missing {', '.join(missing)}")
+        expiration, metadata = body["expiration"], body.get("metadata") or {}
+        if not is_int(expiration):
+            return HTTPStatus.BAD_REQUEST, pey_error(HTTPStatus.BAD_REQUEST, "expiration must be an integer")
+        if not isinstance(metadata, dict):
+            return HTTPStatus.BAD_REQUEST, pey_error(HTTPStatus.BAD_REQUEST, "metadata must be an object")
         ref = new_transaction_id() if kind == "pn" else secrets.token_hex(QR_ID_BYTES)
         self._state.charges[ref] = Charge(
             kind=kind,
             ref=ref,
             concept=str(body["concept"]),
             num_ref=str(body["numRef"]),
-            metadata=dict(body.get("metadata") or {}),
-            expiration=int(body["expiration"]),
+            metadata=dict(metadata),
+            expiration=expiration,
             created_at=int(time.time()),
         )
         if kind == "pn":
@@ -182,7 +190,7 @@ class FakePey:
             return HTTPStatus.OK, {
                 "id": charge.ref,
                 "status": "PENDING",
-                "currency": "MXN",
+                "currency": CURRENCY,
                 "dateCreated": charge.created_at,
                 "metadata": {"externalMetadata": charge.metadata},
             }
@@ -251,15 +259,16 @@ class FakePey:
             return {"delivery": delivery, "response": None}
         request = urllib.request.Request(url, data=payload.encode(), headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(request, timeout=DELIVERY_TIMEOUT_SECONDS) as response:
-                status, content_type, text = response.status, response.headers.get("content-type"), response.read()
-        except urllib.error.HTTPError as error:
-            status, content_type, text = error.code, error.headers.get("content-type"), error.read()
-        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
-            raise ControlError(HTTPStatus.BAD_GATEWAY, f"delivery to {url} failed: {error}") from error
+            status, content_type, text = post(request)
+        except (urllib.error.URLError, http.client.HTTPException, TimeoutError, ConnectionError) as error:
+            raise ControlError(HTTPStatus.BAD_GATEWAY, f"delivery to {url} failed: {error!r}") from error
         return {
             "delivery": delivery,
-            "response": {"status": status, "content_type": content_type, "body": parse_json(text.decode())},
+            "response": {
+                "status": status,
+                "content_type": content_type,
+                "body": parse_json(text.decode(errors="replace")),
+            },
         }
 
     def fail_next(self, body: Json) -> None:
@@ -299,13 +308,22 @@ class FakePey:
         return self._secret_file.read_text().strip()
 
 
+def post(request: urllib.request.Request) -> tuple[int, str | None, bytes]:
+    """Status, content type and body of the answer, error statuses included."""
+    try:
+        with urllib.request.urlopen(request, timeout=DELIVERY_TIMEOUT_SECONDS) as response:
+            return response.status, response.headers.get("content-type"), response.read()
+    except urllib.error.HTTPError as error:
+        return error.code, error.headers.get("content-type"), error.read()
+
+
 def transaction_body(payment: Payment) -> Json:
     return {
         "id": payment.transaction_id,
         "status": "PAID",
         "amount": pesos(payment.amount_minor + payment.fee_minor),
         "amountBreakdown": {"base": pesos(payment.amount_minor), "tip": 0, "fee": pesos(payment.fee_minor)},
-        "currency": "MXN",
+        "currency": CURRENCY,
         "paymentMethod": "CODI",
         "payableType": "API_CODI_PN" if payment.charge.kind == "pn" else "API_CODI_QR",
         "dateCreated": payment.charge.created_at,
@@ -397,7 +415,10 @@ class Handler(BaseHTTPRequestHandler):
         return {"ok": True}
 
     def _json_body(self) -> Json | None:
-        length = int(self.headers.get("content-length") or 0)
+        declared = self.headers.get("content-length") or "0"
+        if not (declared.isascii() and declared.isdigit()):
+            raise ControlError(HTTPStatus.BAD_REQUEST, "content-length must be a non-negative integer")
+        length = int(declared)
         if length == 0:
             return None
         if length > MAX_BODY_BYTES:

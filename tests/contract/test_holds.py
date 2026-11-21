@@ -10,12 +10,15 @@ import httpx
 import pytest
 
 from support import (
-    BUSINESS_NAME,
+    DEFAULT_BANK_NAME,
+    DEPOSIT_CONCEPT,
+    DEPOSIT_PESOS,
     HOLD_SECONDS,
     OTHER_PHONE,
     PHONE,
     PROBLEM,
     PUSH_FAILED,
+    SLOT_TAKEN_TYPE,
     TOO_MANY_ATTEMPTS,
     Api,
     IpPool,
@@ -60,8 +63,8 @@ def test_holds_the_slot_sends_one_codi_push_and_stores_only_the_last_4_digits_an
     body = push["body"]
     assert push["authorized"] is True
     assert set(body) == {"amount", "phoneNumber", "concept", "expiration", "numRef", "metadata"}
-    assert (body["amount"], body["phoneNumber"]) == (0.01, PHONE)
-    assert (body["concept"], body["expiration"]) == (f"Anticipo {BUSINESS_NAME}", HOLD_SECONDS)
+    assert (body["amount"], body["phoneNumber"]) == (DEPOSIT_PESOS, PHONE)
+    assert (body["concept"], body["expiration"]) == (DEPOSIT_CONCEPT, HOLD_SECONDS)
     assert body["numRef"].isdigit()
     assert set(body["metadata"]) == {"bookingId", "attemptId"}
     view = api.view(token)
@@ -108,7 +111,7 @@ def test_answers_409_slottaken_when_the_slot_is_held_by_someone_else(api: Api) -
     response = api.hold({"slotStart": SLOT.start, "phone": OTHER_PHONE}, new_key())
 
     assert is_problem(response, 409)
-    assert response.json()["type"] == "urn:pialy:problem:slot-taken"
+    assert response.json()["type"] == SLOT_TAKEN_TYPE
     assert response.json()["detail"] == "Ese horario se acaba de ocupar"
 
 
@@ -125,7 +128,7 @@ def test_two_concurrent_holds_of_one_slot_with_different_keys_one_is_held_the_ot
         assert sorted(r.status_code for r in responses) == [201, 409], at
         taken = next(r for r in responses if r.status_code == 409)
         assert is_problem(taken, 409)
-        assert taken.json()["type"] == "urn:pialy:problem:slot-taken"
+        assert taken.json()["type"] == SLOT_TAKEN_TYPE
     assert pey.calls("POST", "/codi/pn") == RACE_ROUNDS
 
 
@@ -278,7 +281,7 @@ def test_adds_the_pass_once_the_payment_confirmed_the_booking(api: Api, pey: Pey
     assert view["pass"] == {
         "time": SLOT.start,
         "phoneLast4": PHONE[-4:],
-        "bankName": "BBVA",
+        "bankName": DEFAULT_BANK_NAME,
         "trackingKey": paid["tracking_key"],
     }
 

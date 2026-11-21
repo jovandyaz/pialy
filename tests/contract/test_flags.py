@@ -6,13 +6,13 @@ import httpx
 
 from support import (
     CUSTOMER,
-    DEPOSIT_MINOR,
     PHONE,
     Api,
     Pey,
     assert_close,
     days_ahead,
     iso_from_epoch,
+    money,
     outcome,
     slot,
 )
@@ -36,7 +36,7 @@ def test_shows_open_flags_with_their_booking_and_hides_resolved_ones(api: Api, p
         "createdAt": flag["createdAt"],
         "reason": "duplicate_payment",
         "paidAt": iso_from_epoch(second["date_paid"]),
-        "amount": {"amountMinor": DEPOSIT_MINOR, "currency": "MXN"},
+        "amount": money(),
         "expected": None,
         "received": None,
         "booking": {
