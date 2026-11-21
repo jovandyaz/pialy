@@ -26,6 +26,14 @@ def _restore_root(json_logs: None) -> None:
     return None
 
 
+@pytest.fixture(autouse=True)
+def _fresh_bound_fields() -> Iterator[None]:
+    """`bind` outside a request writes to the test thread's context: clear it around each test."""
+    start_request_context()
+    yield
+    start_request_context()
+
+
 @pytest.fixture
 def context() -> Iterator[None]:
     token = request_id.set("req-12345678")
@@ -98,6 +106,33 @@ def test_event_fields_are_redacted_and_cannot_override_base_keys(
     [line] = lines(capsys)
     assert PHONE not in json.dumps(line)
     assert line["level"] == "INFO"
+
+
+def test_bound_fields_cannot_override_the_base_keys(
+    capsys: pytest.CaptureFixture[str], context: None
+) -> None:
+    configure_logging("INFO")
+    start_request_context()
+    bind(
+        ts="forged",
+        level="DEBUG",
+        logger="forged",
+        message="forged",
+        request_id="forged",
+        event="forged",
+        exc="forged",
+        stack="forged",
+        business_id="biz-1",
+    )
+    logging.getLogger("real").info("hello")
+    [line] = lines(capsys)
+    assert line["level"] == "INFO"
+    assert line["logger"] == "real"
+    assert line["message"] == "hello"
+    assert line["request_id"] == "req-12345678"
+    assert line["ts"] != "forged"
+    assert not {"event", "exc", "stack"} & set(line)
+    assert line["business_id"] == "biz-1"  # business_id and route stay bindable
 
 
 def test_level_filters_and_rejects_unknown(capsys: pytest.CaptureFixture[str]) -> None:

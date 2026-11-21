@@ -139,22 +139,28 @@ def _redact_field(value: str | int) -> str | int:
     return redact(value) if isinstance(value, str) else value
 
 
+# Keys the formatter owns: a bound or event field with one of these names is dropped.
+_RESERVED_KEYS = frozenset(
+    {"ts", "level", "logger", "message", "request_id", "event", "exc", "stack"}
+)
+
+
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         fields: Mapping[str, str | int] = getattr(record, _FIELDS_ATTR, {})
+        extras: dict[str, object] = {"business_id": "", **fields}  # empty until tenancy binds it
+        resolver = _route.get()
+        if resolver is not None:
+            extras["route"] = resolver()
+        extras.update(_bound.get() or {})
         payload: dict[str, object] = {
-            "business_id": "",  # empty until tenancy binds it; the key is on every line
-            **fields,
             "ts": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
             "request_id": request_id.get(),
+            **{key: value for key, value in extras.items() if key not in _RESERVED_KEYS},
         }
-        resolver = _route.get()
-        if resolver is not None:
-            payload["route"] = resolver()
-        payload.update(_bound.get() or {})
         event: str | None = getattr(record, _EVENT_ATTR, None)
         if event is not None:
             payload["event"] = event
