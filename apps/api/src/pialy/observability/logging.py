@@ -38,21 +38,22 @@ _EMAIL = re.compile(r"[\w.+-]{1,64}@[\w-]++(?:\.[\w-]++)+")
 # address and leave the user name, and miss `pass@localhost` altogether. The userinfo of a URL
 # (`scheme://user:pass@`, RFC 3986 s3.2.1) is everything after `://` up to the last `@` before the
 # path, query or fragment, so an `@` left unencoded in a password goes too. A libpq keyword value
-# (`password=...`, `password = '...'`; `PGPASSWORD=` and `sslpassword=` as well) goes up to its
-# closing quote, backslash escapes included (an unclosed quote runs to the end), or else up to
-# the next whitespace. Linear: a userinfo scan starts only right after `://` and stops at the next
-# `/`, so scans never overlap, and a quoted value is read possessively.
+# (`password=...`, `password = '...'` or `"..."`; `PGPASSWORD=` and `sslpassword=` as well) goes up
+# to its closing quote, backslash escapes included (an unclosed quote runs to the end), or else up
+# to the next whitespace. Linear: a userinfo scan starts only right after `://` and stops at the
+# next `/`, so scans never overlap, and a quoted value is read possessively.
 _USERINFO = re.compile(r"(?<=://)[^\s/?#]+@")
-_PASSWORD_VALUE = re.compile(r"(password\s*=\s*)(?:'(?:[^'\\]|\\[\s\S])*+'?|\S+)", re.IGNORECASE)
+_PASSWORD_VALUE = re.compile(
+    r"""(password\s*=\s*)(?:'(?:[^'\\]|\\[\s\S])*+'?|"(?:[^"\\]|\\[\s\S])*+"?|\S+)""", re.IGNORECASE
+)
 # Tokens. A run is a maximal stretch of characters from either base64 alphabet, standard (`+ /`
 # and `=` padding) or url-safe (`- _`); hex and plain words are subsets. A run of 32 or more is a
 # key or a token and is redacted whole, unless it reads as a path: `/` is also a base64 character,
 # so `/app/src/pialy/observability/logging` is a 36-character run. A path has no `+` and no
 # padding; its `/` segments are words (an optional capital, then lowercase letters, digits, `_` or
 # `-`), at least two of them names (two or more lowercase letters: `api`, `bookings`); and only an
-# absolute path (`/...`) may also hold token segments. Measured on 3,000,000 random unpadded
-# standard-base64 keys of 32 to 64 characters, none passes for a path (two short lowercase chunks
-# are not that rare in a key, a leading `/` plus two of them is); a 32-byte key always has padding.
+# absolute path (`/...`) may also hold token segments. A random unpadded base64 key never passes
+# for a path, with or without a leading `/` (`test_random_unpadded_keys_are_redacted_whole`).
 # Inside a path (or a shorter run), each segment of 16 or more characters is judged on its own
 # (`_redact_segment`). Canonical UUIDs never get here.
 # Linear: runs never overlap, and the lookbehind stops a failed match from restarting inside one.
@@ -66,6 +67,8 @@ _NAME = re.compile(r"[a-z][a-z_-]+")
 # File and module names (`security_headers`, `_exception_handler`). A `.` ends a run, so the
 # segment of `security_headers.py` is `security_headers`.
 _LOWERCASE_NAME = re.compile(r"[a-z0-9_-]+")
+# A name made only of lowercase hex digits (`token_hex(8)`) is a token, not a name.
+_HEX_TOKEN = re.compile(r"[0-9a-f]+")
 # Digits fail closed (OWASP Logging Cheat Sheet: no personal data in logs). Any chain of 10 or more
 # digits is redacted whole: digit groups joined by 1 to 3 separator characters (whitespace or
 # `. , / _ - : | ( )`, plus the `T` of an ISO timestamp), after an optional `+` and `(`. A phone or
@@ -133,7 +136,7 @@ def _redact_segment(segment: str, after_slash: bool) -> str:
             return segment
     if sum(char.isdecimal() for char in segment) >= MIN_DIGITS:
         return "[digits]"
-    if _LOWERCASE_NAME.fullmatch(segment):
+    if _LOWERCASE_NAME.fullmatch(segment) and not _HEX_TOKEN.fullmatch(segment):
         return segment
     return f"{segment[:LOGGED_TOKEN_CHARS]}…"
 
