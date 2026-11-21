@@ -36,45 +36,27 @@ _TOKEN_IN_PATH = re.compile(r"(/(?:api/bookings|api/verify|c|negocio/verificar)/
 # the RFC's 255 characters no longer defeats the pattern and leaves the local part behind.
 _EMAIL = re.compile(r"[\w.+-]{1,64}@[\w-]++(?:\.[\w-]++)+")
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{32,}")
-_DIGITS = re.compile(r"\d{10,}")
-# A 10-digit phone with an optional +52/52 prefix (and the legacy mobile `1` after it), grouped
-# 2-4-4 or 3-3-4 (area code optionally in parentheses) and separated by single spaces, dots or
-# dashes. Only these shapes, so a date, an ISO timestamp, an IP address or a small number is
-# never taken for a phone.
-_SEP = r"[ .-]?"
-_PHONE = re.compile(
-    rf"(?<!\d)(?:\+?52{_SEP}(?:1{_SEP})?)?"
-    rf"(?:(?:\(\d{{2}}\)|\d{{2}}){_SEP}\d{{4}}{_SEP}\d{{4}}"
-    rf"|(?:\(\d{{3}}\)|\d{{3}}){_SEP}\d{{3}}{_SEP}\d{{4}})(?!\d)"
-)
-# A maximal run of digit groups joined by 1 to 3 separator characters (any whitespace, dot, comma,
-# slash, underscore or dash): a CLABE or a card number written in groups. Linear: the groups are
-# digits and the separators never are, so the groups and the separators never overlap and nothing
-# backtracks beyond the 3 separator characters. Redaction fails closed: from 15 digits (the shortest
-# card) a run is redacted whole, however long, so a number glued to an account cannot shelter part
-# of it. Runs made only of ISO dates are exempt.
-_CHAIN_SEP = r"[\s.,/_-]{1,3}"
+# Digits fail closed (OWASP Logging Cheat Sheet: no personal data in logs). Any chain of 10 or more
+# digits is redacted whole: digit groups joined by 1 to 3 separator characters (whitespace or
+# `. , / _ - : | ( )`, plus the `T` of an ISO timestamp), after an optional `+` and `(`. A phone or
+# a CLABE in any grouping is caught without knowing its shape; an amount, an IP address or a long
+# number that reaches 10 digits is redacted too, an accepted loss (money is integer minor units).
+# Linear: the groups are digits and the separators never are, so nothing backtracks beyond the 3
+# separator characters.
+MIN_DIGITS = 10
+_CHAIN_SEP = r"[\s.,/_\-:|()T]{1,3}"
+_DIGIT_CHAIN = re.compile(rf"(?<!\d)\+?\(?\d+(?:{_CHAIN_SEP}\d+)*")
+# The only exemption besides canonical UUIDs (split out before this runs): a chain that is a valid
+# ISO 8601 date or timestamp, or a list of them. Month, day, hour, minute, second and offset are
+# range-checked and the fraction has at most 9 digits, so no invalid part can shelter a number.
+# Each timestamp is atomic and the list possessive, so a failed match never backtracks into them.
 _MONTH = r"(?:0[1-9]|1[0-2])"
 _DAY = r"(?:0[1-9]|[12]\d|3[01])"
-_ISO_DATE = rf"\d{{4}}-{_MONTH}-{_DAY}"  # months and days are checked: `1234-56-78` is no date
-_DIGIT_CHAIN = re.compile(rf"(?<!\d)\+?\d+(?:{_CHAIN_SEP}\d+)*")
-_DATES_ONLY = re.compile(rf"{_ISO_DATE}(?:{_CHAIN_SEP}{_ISO_DATE})+")
-MIN_ACCOUNT_DIGITS = 15
-# A chain of exactly 10 digits is also redacted when it looks like a phone in a grouping `_PHONE`
-# does not know (`5512 3456 78`, `5512-345678`, `+52 5512 3456 78`): 2 to 4 groups of 2 or more
-# digits joined only by whitespace, dots or dashes. Not a phone: a date shape (`2026-11-21 01`,
-# `21-11-2026 12`), IPv4 (4 dotted groups) or a decimal (2 dotted groups), an amount (commas,
-# slashes and underscores never join a phone). The price: a phone whose groups happen to read as
-# a valid date (`21 11 3456 78`) is left alone. Only chains of 10 to 14 digits get here, so each
-# check is O(1).
-PHONE_DIGITS = 10
-COUNTRY_CODE_GROUPS = ("52", "521")
-_DIGIT_GROUP = re.compile(r"\d+")
-_NON_DIGITS = re.compile(r"\D+")
-_PHONE_SEPARATOR = re.compile(r"[\s.-]{1,3}")
-_DATE_SHAPE = re.compile(
-    rf"(?<!\d)(?:\d{{4}}[\s.-]{_MONTH}[\s.-]{_DAY}|{_DAY}[\s.-]{_MONTH}[\s.-]\d{{4}})(?!\d)"
-)
+_HOUR = r"(?:[01]\d|2[0-3])"
+_MINUTE = r"[0-5]\d"  # seconds too
+_ISO_TIME = rf"{_HOUR}:{_MINUTE}(?::{_MINUTE}(?:[.,]\d{{1,9}})?)?(?:[+-]{_HOUR}:{_MINUTE})?"
+_ISO_TIMESTAMP = rf"(?>\d{{4}}-{_MONTH}-{_DAY}(?:[T ]{_ISO_TIME})?)"
+_TIMESTAMPS_ONLY = re.compile(rf"{_ISO_TIMESTAMP}(?:{_CHAIN_SEP}{_ISO_TIMESTAMP})*+")
 _HEX = "[0-9a-fA-F]"
 # A canonical UUID is an identifier, not a secret: it stays readable in logs.
 _UUID = re.compile(
@@ -87,49 +69,12 @@ def _shorten_token(match: re.Match[str]) -> str:
     return f"{match[1]}{match[2][:LOGGED_TOKEN_CHARS]}…"
 
 
-def _is_phone_grouping(groups: list[str], separators: list[str], tail: str) -> bool:
-    return (
-        sum(map(len, groups)) == PHONE_DIGITS
-        and 2 <= len(groups) <= 4
-        and min(map(len, groups)) >= 2
-        and all(_PHONE_SEPARATOR.fullmatch(separator) for separator in separators)
-        and not (set(separators) == {"."} and len(groups) != 3)  # IPv4 or a decimal
-        and not _DATE_SHAPE.search(tail)
-    )
-
-
-def _looks_like_phone(chain: str) -> bool:
-    """The chain is 10 digits in a phone grouping, with or without a country code in front.
-
-    The country code is `52`, `521` or `52` followed by a lone `1` (legacy mobile); what follows
-    it must be a grouping the bare 10-digit path accepts.
-    """
-    body = chain.lstrip("+")
-    groups = _DIGIT_GROUP.findall(body)
-    separators = _NON_DIGITS.findall(body)  # one between each two groups
-    starts = [0]
-    if groups[0] in COUNTRY_CODE_GROUPS:
-        starts.append(1)
-        if groups[:2] == ["52", "1"]:
-            starts.append(2)
-    offsets = [0]  # where each group starts in `body`
-    for group, separator in zip(groups, separators, strict=False):
-        offsets.append(offsets[-1] + len(group) + len(separator))
-    return any(
-        _is_phone_grouping(groups[start:], separators[start:], body[offsets[start] :])
-        for start in starts
-        if start < len(groups)
-    )
-
-
 def _redact_digit_chain(match: re.Match[str]) -> str:
     chain = match[0]
     digits = sum(char.isdecimal() for char in chain)  # what `\d` matches
-    if digits >= MIN_ACCOUNT_DIGITS:
-        return chain if _DATES_ONLY.fullmatch(chain) else "[digits]"
-    if digits >= PHONE_DIGITS and _looks_like_phone(chain):
-        return "[digits]"
-    return chain
+    if digits < MIN_DIGITS or _TIMESTAMPS_ONLY.fullmatch(chain):
+        return chain
+    return "[digits]"
 
 
 def _is_local_part_char(char: str) -> bool:
@@ -159,13 +104,11 @@ def _redact_emails(text: str) -> str:
 
 def _redact_plain(text: str) -> str:
     text = _TOKEN.sub("[token]", text)
-    text = _DIGIT_CHAIN.sub(_redact_digit_chain, text)
-    text = _PHONE.sub("[digits]", text)
-    return _DIGITS.sub("[digits]", text)
+    return _DIGIT_CHAIN.sub(_redact_digit_chain, text)
 
 
 def redact(text: str) -> str:
-    """Hide booking tokens, emails, 32+ character tokens, phones, grouped accounts and 10+ digits.
+    """Hide booking tokens, emails, 32+ character tokens and every chain of 10 or more digits.
 
     Canonical UUIDs pass through untouched. Emails are redacted first, on the whole text, so a
     UUID inside an address (`user+<uuid>@x.mx`) cannot split it and leave a half behind.

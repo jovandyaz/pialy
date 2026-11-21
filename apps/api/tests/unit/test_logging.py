@@ -184,7 +184,7 @@ def test_numeric_event_fields_are_redacted_too(capsys: pytest.CaptureFixture[str
     assert line["phone"] == "[digits]"
     assert line["account"] == "[digits]"
     assert line["big_float"] == "[digits]"  # a 17-digit chain, ".0" included
-    assert line["phone_float"] == "[digits].0"
+    assert line["phone_float"] == "[digits]"  # an 11-digit chain, ".0" included
     assert line["count"] == 7
     assert line["ratio"] == 0.5
     assert line["flag"] is True
@@ -200,7 +200,7 @@ def test_redact_value_keeps_scalars_and_redacts_the_text_of_other_objects() -> N
 
     assert redact_value(int(PHONE)) == "[digits]"
     assert redact_value(1234567890123456.0) == "[digits]"
-    assert redact_value(float(PHONE)) == "[digits].0"
+    assert redact_value(float(PHONE)) == "[digits]"
     assert redact_value(7) == 7
     assert redact_value(0.5) == 0.5
     assert redact_value(True) is True
@@ -327,7 +327,6 @@ def test_phones_with_separators_are_redacted(phone: str) -> None:
         "at 2026-11-21 01:48:00",
         "GET /api/slots?date=2026-11-15",
         "took 123 ms for 4567 rows",
-        "ip 192.168.1.100 and 10.0.0.12",
         "version 1.2.3 build 55-1234",
         "status 200 in 12.5 ms",
         f"booking {UUID} ok",
@@ -348,6 +347,11 @@ def test_phone_redaction_leaves_ids_timestamps_and_small_numbers(text: str) -> N
         "1234-5678-9012-3456",
         "1234 567890 12345",  # 15 digits
         "1234 5678 9012 3456 789",  # 19 digits
+        "12345:67890:12345678",  # colons
+        "12345|67890|12345678",  # pipes
+        "0121 | 8001 | 2345 | 6789 | 12",
+        "(012) 180 01234567891 2",
+        "012(180)012345678912",
     ],
 )
 def test_spaced_account_and_card_numbers_are_redacted_whole(account: str) -> None:
@@ -419,7 +423,7 @@ def test_account_and_card_numbers_with_any_common_separator_are_redacted(account
         "5512\xa0345678",
         "5512  3456  78",
         "5512\t345678",
-        "+52 5512 3456 78",  # country code with a grouping `_PHONE` does not know
+        "+52 5512 3456 78",
         "52 5512 3456 78",
         "+521 5512 3456 78",
         "+52-5512-345678",
@@ -429,6 +433,18 @@ def test_account_and_card_numbers_with_any_common_separator_are_redacted(account
         "+52 1 5512-345678",
         "+52 1 55 12345678",
         "+52 1 5512\xa03456\xa078",
+        "55 12 34 56 78",  # pairs
+        "+52 55 12 34 56 78",
+        "52 55 12 34 56 78",
+        "+52 1 55 12 34 56 78",
+        "55-12-34-56-78",
+        "55.12.34.56.78",
+        "55:12:34:56:78",
+        "55|1234|5678",
+        "(55) 12 34 56 78",
+        "(55)12-34-56-78",
+        "+52 (55) 12 34 56 78",
+        "5 5 1 2 3 4 5 6 7 8",
     ],
 )
 def test_ten_digit_phones_in_other_groupings_are_redacted(phone: str) -> None:
@@ -460,37 +476,74 @@ def test_spaced_account_next_to_a_phone_redacts_both() -> None:
 @pytest.mark.parametrize(
     "text",
     [
-        "1234 5678 9012 34",  # 14 digits: shorter than any account or card
         "at 2026-11-21T01:48:00Z",
         "at 2026-11-21 01:48:00",
         "at 2026-11-21T01:48:00.123456+00:00",
+        "at 2026-11-21T01:48:00.123-05:00",
+        "at 2026-11-21T01:48",
+        "at 2026-11-21T01:48:00.123456789Z",  # nanoseconds
         "date=2026-11-15",
         "range 2026-11-15 2026-11-16",
         "range 2026-11-15-2026-11-16",
         "days 2026-11-15 2026-11-16 2026-11-17 2026-11-18",
         "days 2026-11-15, 2026-11-16, 2026-11-17",
-        "amount 12,345,678.90 paid",  # 10 digits
-        "amount 1,234,567.89 and 1,234.50",
+        "from 2026-11-21T01:48:00Z to 2026-11-22T09:30:00Z",
+        "slots 2026-11-21T10:00:00, 2026-11-21T10:30:00, 2026-11-21T11:00:00",
+        "interval 2026-11-21T01:48:00/2026-11-22T01:48:00",
+        "amount 1,234,567.89 and 1,234.50",  # 9 digits, then 6
         "at 2026-11-21 01:48:00,123 INFO",
         "p50=1234 p95=5678 p99=9012",
-        "1,234,567,890,123 bytes",  # 13 digits
         "p50=1234 p95=5678",
-        "amount 12.345.678,90 paid",  # 10 digits, dots then a decimal comma
-        "ip 192.168.10.12",  # 10 digits in 4 dotted groups
-        "at 21-11-2026 12:00",  # dd-mm-yyyy and an hour: 10 digits
-        "ratio 5512.345678",  # a decimal, 10 digits
-        "bytes 1.234.567.890",  # a group of 1 digit
-        "values 10 20 30 40 50",  # 5 groups
         "id 1234 5678",  # 8 digits
-        "ip 192.168.100.200",
         "version 1.2.3.4.5",
-        "build 20261121-0148",
+        "551234567",  # 9 digits
         "id 12345678-1234-1234-1234-123456789012",
         f"booking {UUID} ok",
     ],
 )
-def test_digit_group_rule_leaves_dates_ips_versions_and_uuids(text: str) -> None:
+def test_digit_rule_leaves_short_numbers_iso_timestamps_and_uuids(text: str) -> None:
     assert redact(text) == text
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        # Flipped by the fail-closed rule: these used to pass as numbers, dates or IPs.
+        ("1234 5678 9012 34", "[digits]"),
+        ("ip 192.168.1.100 and 10.0.0.12", "ip [digits] and 10.0.0.12"),
+        ("ip 192.168.10.12", "ip [digits]"),
+        ("ip 192.168.100.200", "ip [digits]"),
+        ("amount 12,345,678.90 paid", "amount [digits] paid"),
+        ("amount 12.345.678,90 paid", "amount [digits] paid"),
+        ("1,234,567,890,123 bytes", "[digits] bytes"),
+        ("at 21-11-2026 12:00", "at [digits]"),  # day first: not ISO 8601
+        ("ratio 5512.345678", "ratio [digits]"),
+        ("bytes 1.234.567.890", "bytes [digits]"),
+        ("values 10 20 30 40 50", "values [digits]"),
+        ("build 20261121-0148", "build [digits]"),  # ISO basic format is not exempt
+    ],
+)
+def test_any_chain_of_10_or_more_digits_is_redacted(text: str, expected: str) -> None:
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("at 2026-11-21 25:00:00", "at [digits]"),  # hour 25
+        ("at 2026-11-21T01:61:00Z", "at [digits]Z"),  # minute 61
+        ("at 2026-11-21T01:48:61Z", "at [digits]Z"),  # second 61
+        ("at 2026-11-21T01:48:00.5512345678Z", "at [digits]Z"),  # a 10-digit fraction
+        ("at 2026-11-21T01:48:00-25:00", "at [digits]"),  # offset hour 25
+        ("2026-11-21 5512345678", "[digits]"),
+        ("2026-11-21T01:48:00 5512345678", "[digits]"),
+        ("2026-11-21T01:48:00Z 55 12 34 56 78", "2026-11-21T01:48:00Z [digits]"),
+        ("2026-11-21T01:48:00+55 12 34 56 78", "2026-11-21T01:48:00+[digits]"),
+        ("2026-11-21 (55) 1234 5678", "[digits]"),
+    ],
+)
+def test_the_timestamp_exemption_only_covers_valid_timestamps(text: str, expected: str) -> None:
+    assert redact(text) == expected
 
 
 def test_phone_next_to_a_uuid_is_redacted_and_the_uuid_kept() -> None:
@@ -536,6 +589,19 @@ ADVERSARIAL_INPUTS = {
     "many_date_shaped_chains": "2026-11-21 01 x " * 6_600,
     "date_chain": "2026-11-15 " * 9_000,
     "date_chain_with_tail": "2026-11-15 " * 9_000 + "1",
+    "colon_digits": "1:" * 50_000,
+    "pipe_digits": "1|" * 50_000,
+    "paren_digits": "(1)" * 33_333,
+    "spaced_paren_digits": "1 ( " * 25_000,
+    "new_separators_mixed": ("1" + ":|(") * 25_000,
+    "t_digits": "1T" * 50_000,
+    "plus_digits": "+1" * 50_000,
+    "open_parens": "(" * 100_000,
+    "timestamp_chain": "2026-11-21T01:48:00.123456 " * 3_700,
+    "timestamp_chain_with_tail": "2026-11-21T01:48:00.123456 " * 3_700 + "1",
+    "many_bad_timestamps": "2026-11-21T25:48:00 x " * 4_500,
+    "huge_fraction": "2026-11-21T01:48:00." + "1" * 100_000,
+    "offset_chain": "2026-11-21T01:48:00-05:00 " * 3_800,
     "path_prefixes": "/c/" * 33_333,
     "path_tokens": "/c/a" * 25_000,
     "uuid_shapes": (UUID[:-1] + "-") * 2_700,
