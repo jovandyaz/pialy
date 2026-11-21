@@ -53,6 +53,33 @@ def test_other_well_formed_incoming_ids_are_kept(incoming: str) -> None:
     assert resolve_request_id(incoming) == incoming
 
 
+@pytest.mark.parametrize(
+    "incoming",
+    [
+        "3f9a" * 8,  # 32 hex characters: a token, not an id
+        "AbCdEfGhIjKlMnOpQrStUvWxYz012345",  # 32 characters, 6 digits: a token too
+        "5512----345678",  # 10 digits spread by hyphens too wide for `redact` to join
+    ],
+)
+def test_incoming_ids_that_redaction_would_change_are_replaced(incoming: str) -> None:
+    resolved = resolve_request_id(incoming)
+    assert resolved != incoming
+    assert FRESH_UUID.fullmatch(resolved)
+
+
+def test_a_32_hex_request_id_is_neither_echoed_nor_logged(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], json_logs: None
+) -> None:
+    token = "3f9a" * 8
+    monkeypatch.setenv("ENV", "test")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:1/none")
+    configure_logging("INFO")
+    with TestClient(create_app(Settings(), system_clock, lambda: True)) as client:
+        response = client.get("/healthz", headers={"X-Request-Id": token})
+    assert FRESH_UUID.fullmatch(response.headers["x-request-id"])
+    assert token not in capsys.readouterr().out
+
+
 def test_uuids_are_always_kept_even_when_their_digits_run_long() -> None:
     # About 1 in 11 UUIDs has a run of 10 or more decimal digits (hyphens removed): they are
     # identifiers, not PII, and must not be replaced. Name-based ids keep the test deterministic.

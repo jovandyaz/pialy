@@ -15,6 +15,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from pialy.http.problems import problem_response
 from pialy.observability.logging import (
     bind_route,
+    redact,
     request_id,
     start_request_context,
 )
@@ -43,8 +44,9 @@ def _is_canonical_uuid(value: str) -> bool:
 
 
 def _is_safe_request_id(value: str) -> bool:
-    if not _VALID_REQUEST_ID.fullmatch(value):
+    if not _VALID_REQUEST_ID.fullmatch(value) or redact(value) != value:
         return False
+    # `redact` joins digit groups across at most 3 hyphens; `5512----345678` still hides a phone.
     return _is_canonical_uuid(value) or not _LONG_DIGIT_RUN.search(value.replace("-", ""))
 
 
@@ -53,7 +55,8 @@ def resolve_request_id(incoming: str | None) -> str:
 
     The header is untrusted and ends up in every log line and in the response, so it is validated
     and, if malformed, safely replaced (OWASP Logging Cheat Sheet). Besides the shape check, an id
-    with a run of 10 or more digits once hyphens are removed (a phone, a CLABE) is replaced.
+    that log redaction would change (a token of 32 or more characters, a chain of 10 or more
+    digits) is replaced, and so is one with a run of 10 or more digits once hyphens are removed.
     A canonical UUID is always kept: it is an identifier, `redact` lets it through too, and about
     1 in 11 random UUIDs has such a run of decimal digits.
     """
