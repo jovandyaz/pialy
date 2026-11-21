@@ -46,8 +46,10 @@ UNIX_SECONDS = r"^[0-9]{1,10}$"
 # metadata.bankCode: the payer's bank, by its 3-digit code (as in a CLABE) or 5-digit SPEI one.
 BANK_CODE = r"^[0-9]{3,5}$"
 # metadata.trackingKey: the SPEI clave de rastreo, up to 30 alphanumeric characters
-# (banxico.org.mx/cep). A 10-digit key has the shape of a phone and is accepted all the same.
+# (banxico.org.mx/cep). A 10-digit key has the shape of a phone and is accepted all the same;
+# 15 digits or more alone are refused, the length of a CLABE (18) or a card number (15 to 19).
 TRACKING_KEY = r"^[0-9A-Za-z]{1,30}$"
+ACCOUNT_NUMBER = r"^[0-9]{15,}$"
 # metadata.attemptId: the id pialy gave the attempt, a UUID in canonical (lowercase) form.
 UUID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
@@ -275,7 +277,7 @@ STATEMENTS = (
                     AND {member("datePaid", ("number",), UNIX_SECONDS)}
                     AND {member("metadata,clabe", ("string",))}
                     AND {member("metadata,bankCode", ("string", "number"), BANK_CODE)}
-                    AND {member("metadata,trackingKey", ("string",), TRACKING_KEY)}
+                    AND {member("metadata,trackingKey", ("string",), TRACKING_KEY, ACCOUNT_NUMBER)}
                     AND {member("metadata,attemptId", ("string",), UUID)}
             END
         )

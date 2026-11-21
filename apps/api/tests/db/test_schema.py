@@ -886,6 +886,8 @@ def test_bookings_are_found_by_their_intent(owner_db: Database) -> None:
         SANITIZED_QR | {"transactionId": "01m3qr8h0rh0xbckyyd242yxnv"},
         with_metadata(bankCode="002"),
         with_metadata(trackingKey="A" * 30),
+        with_metadata(trackingKey="12345678901234"),
+        with_metadata(trackingKey="TRACK1234567890123456"),
         SANITIZED_QR
         | {"transactionId": "txn_2026-AbCdEf0123456789", "codiQrId": "qr_0A1b2C3d4E5f"},
         SANITIZED_QR | {"transactionId": "T" * 64, "codiQrId": "Q" * 64},
@@ -902,6 +904,8 @@ def test_bookings_are_found_by_their_intent(owner_db: Database) -> None:
         "lowercase-ulid",
         "three-digit-bank-code",
         "longest-tracking-key",
+        "longest-digits-only-tracking-key",
+        "tracking-key-with-letters-and-a-digit-run",
         "new-format-ids",
         "longest-ids",
         "shortest-ids",
@@ -950,7 +954,8 @@ def test_payment_events_reject_fields_outside_the_projection(
 
 # Each field of the projection keeps its documented type and shape, so an allowed key cannot
 # carry a phone, a CLABE or anything else. pey's ids are opaque strings: any format is taken but
-# digits alone, the shape of a phone or a CLABE.
+# digits alone, the shape of a phone or a CLABE. A tracking key may be digits alone, as the
+# fixture's is, but not 15 or more of them: the length of a CLABE (18) or a card (15 to 19).
 MALFORMED_FIELDS: list[tuple[str, dict[str, object]]] = [
     ("clabe-in-bank-code", with_metadata(bankCode=CLABE)),
     ("clabe-number-in-bank-code", with_metadata(bankCode=int(CLABE))),
@@ -980,6 +985,9 @@ MALFORMED_FIELDS: list[tuple[str, dict[str, object]]] = [
     ("tracking-key-number", with_metadata(trackingKey=192191042)),
     ("tracking-key-spaces", with_metadata(trackingKey="0192 191042")),
     ("tracking-key-too-long", with_metadata(trackingKey="A" * 31)),
+    ("tracking-key-clabe", with_metadata(trackingKey=CLABE)),
+    ("tracking-key-card", with_metadata(trackingKey="1234567890123456")),
+    ("tracking-key-15-digits", with_metadata(trackingKey="123456789012345")),
     ("attempt-id-not-uuid", with_metadata(attemptId="att_01TESTATTEMPTQR000000001")),
     ("attempt-id-number", with_metadata(attemptId=1)),
     ("attempt-id-uppercase", with_metadata(attemptId=ATTEMPT_ID.upper())),
