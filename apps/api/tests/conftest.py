@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterator
 
 import pytest
@@ -26,3 +27,13 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for name in SETTINGS_VARS:
         monkeypatch.delenv(name, raising=False)
     yield
+
+
+@pytest.fixture
+def json_logs() -> Iterator[None]:
+    """Let a test call `configure_logging`, then put the root logger back as it was."""
+    root = logging.getLogger()
+    handlers, level = list(root.handlers), root.level
+    yield
+    root.handlers[:] = handlers
+    root.setLevel(level)
