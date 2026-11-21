@@ -52,9 +52,13 @@ def migrations_at_head(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def json_logs() -> Iterator[None]:
-    """Let a test call `configure_logging`, then put the root logger back as it was."""
-    root = logging.getLogger()
-    handlers, level = list(root.handlers), root.level
+    """Let a test call `configure_logging`, then put back every logger it changes."""
+    loggers = [
+        logging.getLogger(name) for name in ("", "uvicorn", "uvicorn.error", "uvicorn.access")
+    ]
+    saved = [(list(logger.handlers), logger.level, logger.propagate) for logger in loggers]
     yield
-    root.handlers[:] = handlers
-    root.setLevel(level)
+    for logger, (handlers, level, propagate) in zip(loggers, saved, strict=True):
+        logger.handlers[:] = handlers
+        logger.setLevel(level)
+        logger.propagate = propagate
