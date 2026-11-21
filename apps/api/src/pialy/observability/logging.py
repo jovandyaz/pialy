@@ -35,7 +35,18 @@ _TOKEN_IN_PATH = re.compile(r"(/(?:api/bookings|api/verify|c|negocio/verificar)/
 # character, so giving characters back could not help. Each label is read once, and a label over
 # the RFC's 255 characters no longer defeats the pattern and leaves the local part behind.
 _EMAIL = re.compile(r"[\w.+-]{1,64}@[\w-]++(?:\.[\w-]++)+")
-_TOKEN = re.compile(r"[A-Za-z0-9_-]{32,}")
+# Tokens. A run is a maximal stretch of characters from either base64 alphabet, standard (`+ /`
+# and `=` padding) or url-safe (`- _`); hex and plain words are subsets. A run of 32 or more is a
+# key or a token and is redacted whole, unless it reads as a path: `/` is also a base64 character,
+# so `/app/src/pialy/observability/logging` is a 36-character run. A path has no `+` and no
+# padding, and each `/` segment is a word (an optional capital, then lowercase letters, digits,
+# `_` or `-`); even then a segment of 32 or more is a token. A random base64 key passes for a path
+# with odds below one in a million (its segments mix cases), and a 32-byte key always has padding.
+# Linear: runs never overlap, and the lookbehind stops a failed match from restarting inside one.
+MIN_TOKEN_CHARS = 32
+_RUN = re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{32,}(?:={1,2}(?![A-Za-z0-9+/=_-]))?")
+_WORD = re.compile(r"[A-Z]?[a-z0-9_-]*")
+_TOKEN = re.compile(rf"[A-Za-z0-9_-]{{{MIN_TOKEN_CHARS},}}")  # a token inside one segment
 # Digits fail closed (OWASP Logging Cheat Sheet: no personal data in logs). Any chain of 10 or more
 # digits is redacted whole: digit groups joined by 1 to 3 separator characters (whitespace or
 # `. , / _ - : | ( )`, plus the `T` of an ISO timestamp), after an optional `+` and `(`. A phone or
@@ -67,6 +78,19 @@ _UUID = re.compile(
 
 def _shorten_token(match: re.Match[str]) -> str:
     return f"{match[1]}{match[2][:LOGGED_TOKEN_CHARS]}…"
+
+
+def _is_path(run: str) -> bool:
+    return (
+        "+" not in run
+        and not run.endswith("=")
+        and all(_WORD.fullmatch(segment) for segment in run.split("/"))
+    )
+
+
+def _redact_run(match: re.Match[str]) -> str:
+    run = match[0]
+    return _TOKEN.sub("[token]", run) if _is_path(run) else "[token]"
 
 
 def _redact_digit_chain(match: re.Match[str]) -> str:
@@ -103,7 +127,7 @@ def _redact_emails(text: str) -> str:
 
 
 def _redact_plain(text: str) -> str:
-    text = _TOKEN.sub("[token]", text)
+    text = _RUN.sub(_redact_run, text)
     return _DIGIT_CHAIN.sub(_redact_digit_chain, text)
 
 

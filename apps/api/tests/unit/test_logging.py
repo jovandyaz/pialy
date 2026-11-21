@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 import logging
 import time
@@ -23,6 +25,18 @@ TOKEN = "3f9a" * 8  # 32 hex characters
 CLABE = "123456789012345678"
 BOOKING_TOKEN = "Zx9QbW1kT2tlbl9TZWNyZXQ"
 UUID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+
+
+def synthetic_key(seed: str, size: int, *, urlsafe: bool = False) -> str:
+    """A deterministic stand-in for a random key: no key-like literal in a public repo."""
+    raw = hashlib.sha512(seed.encode()).digest()[:size]
+    return (base64.urlsafe_b64encode if urlsafe else base64.b64encode)(raw).decode()
+
+
+STANDARD_KEY = synthetic_key("s6", 32)  # 44 characters with `+`, `/` and `=` padding
+PADDED_KEY = synthetic_key("p0", 31)  # 44 characters ending in `==`
+URLSAFE_KEY = synthetic_key("u2", 32, urlsafe=True)  # `-` and `_`
+SLASH_ONLY_KEY = synthetic_key("n0", 48)  # 64 characters, `/` but no `+` and no padding
 
 
 @pytest.fixture(autouse=True)
@@ -280,6 +294,48 @@ def test_uuid_shape_does_not_shelter_real_tokens() -> None:
     assert redact("id 12345678-1234-1234-1234-123456789012") == (
         "id 12345678-1234-1234-1234-123456789012"
     )
+
+
+def test_the_synthetic_keys_have_the_shapes_under_test() -> None:
+    assert len(STANDARD_KEY) == 44
+    assert {"+", "/"} <= set(STANDARD_KEY)
+    assert STANDARD_KEY.endswith("=") and not STANDARD_KEY.endswith("==")
+    assert PADDED_KEY.endswith("==")
+    assert {"-", "_"} <= set(URLSAFE_KEY)
+    assert "/" in SLASH_ONLY_KEY and "+" not in SLASH_ONLY_KEY and "=" not in SLASH_ONLY_KEY
+
+
+@pytest.mark.parametrize(
+    "key",
+    [STANDARD_KEY, PADDED_KEY, URLSAFE_KEY, SLASH_ONLY_KEY],
+    ids=["standard_44", "padded", "urlsafe", "slash_only_64"],
+)
+def test_base64_keys_are_redacted_whole(key: str) -> None:
+    assert redact(f"key {key} end") == "key [token] end"
+    assert redact(f"CREDENTIALS_ENC_KEY=v1:{key}") == "CREDENTIALS_ENC_KEY=v1:[token]"
+    assert redact(f'{{"key": "{key}"}}') == '{"key": "[token]"}'
+
+
+def test_a_versioned_key_list_is_redacted_entry_by_entry() -> None:
+    assert redact(f"v2:{STANDARD_KEY},v1:{PADDED_KEY}") == "v2:[token],v1:[token]"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'File "/app/src/pialy/observability/logging.py", line 3, in redact',
+        'File "/app/.venv/lib/python3.13/site-packages/uvicorn/protocols/http/httptools_impl.py"',
+        "uvicorn/protocols/http/httptools_impl.py",
+        "/Users/dev/Developer/Personal/Github/project/apps/api/src",
+        "GET /api/b/panaderia/bookings/new/events/stream 200",
+    ],
+)
+def test_paths_are_not_taken_for_base64_keys(text: str) -> None:
+    assert redact(text) == text
+
+
+def test_a_long_segment_of_a_relative_path_is_still_a_token() -> None:
+    assert redact(f"{TOKEN}/raw/data") == "[token]/raw/data"
 
 
 @pytest.mark.parametrize(
@@ -602,6 +658,11 @@ ADVERSARIAL_INPUTS = {
     "many_bad_timestamps": "2026-11-21T25:48:00 x " * 4_500,
     "huge_fraction": "2026-11-21T01:48:00." + "1" * 100_000,
     "offset_chain": "2026-11-21T01:48:00-05:00 " * 3_800,
+    "base64_chars": "a+b/" * 25_000,
+    "padded_runs": ("a" * 40 + "== ") * 2_300,
+    "equals_signs": "a=" * 50_000,
+    "long_path": "/segment" * 12_500,
+    "path_of_words_and_one_key": "/segment" * 12_000 + "/" + STANDARD_KEY,
     "path_prefixes": "/c/" * 33_333,
     "path_tokens": "/c/a" * 25_000,
     "uuid_shapes": (UUID[:-1] + "-") * 2_700,
