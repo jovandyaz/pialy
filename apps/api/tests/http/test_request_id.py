@@ -39,29 +39,32 @@ def test_incoming_ids_with_a_run_of_10_or_more_digits_are_replaced(incoming: str
 @pytest.mark.parametrize(
     "incoming",
     [
-        "abc-12345678",  # 8 digits
-        "req-ABCdef123456",
-        "551234567",  # 9 digits
-        "55-1234-567",  # 9 digits once the hyphens are gone
-        "12345-6789-abcd",
         "12345678-1234-1234-1234-123456789012",  # canonical UUID whose last group is 12 digits
-        "3F2504E0-4F89-11D3-9A0C-0305E82C3301",  # upper case
         "3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+        "00000000-0000-0000-0000-000000000000",
     ],
 )
-def test_other_well_formed_incoming_ids_are_kept(incoming: str) -> None:
+def test_a_canonical_uuid_is_kept(incoming: str) -> None:
     assert resolve_request_id(incoming) == incoming
 
 
 @pytest.mark.parametrize(
     "incoming",
     [
+        "Zx9QbW1kT2tlbl9TZWNyZXQ",  # a booking token
         "3f9a" * 8,  # 32 hex characters: a token, not an id
-        "AbCdEfGhIjKlMnOpQrStUvWxYz012345",  # 32 characters, 6 digits: a token too
-        "5512----345678",  # 10 digits spread by hyphens too wide for `redact` to join
+        "3F2504E0-4F89-11D3-9A0C-0305E82C3301",  # upper case
+        "{3f2504e0-4f89-11d3-9a0c-0305e82c3301}",  # accepted by `uuid.UUID`, not canonical
+        "urn:uuid:3f2504e0-4f89-11d3-9a0c-0305e82c3301",
+        "3f2504e04f8911d39a0c0305e82c3301",  # no hyphens
+        "AbCdEfGhIjKlMnOpQrStUvWxYz012345",  # 32 characters, 6 digits
+        "5512----345678",  # 10 digits spread by hyphens
+        "abc-12345678",
+        "req-ABCdef123456",
+        "551234567",
     ],
 )
-def test_incoming_ids_that_redaction_would_change_are_replaced(incoming: str) -> None:
+def test_any_other_incoming_id_is_replaced(incoming: str) -> None:
     resolved = resolve_request_id(incoming)
     assert resolved != incoming
     assert FRESH_UUID.fullmatch(resolved)

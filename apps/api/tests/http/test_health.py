@@ -255,13 +255,16 @@ def test_request_id_header_and_problem_field_match(client: TestClient) -> None:
     assert re.fullmatch(r"[0-9a-f-]{36}", request_id)
 
 
-def test_accepts_a_well_formed_incoming_request_id(client: TestClient) -> None:
-    response = client.get("/nope", headers={"X-Request-Id": "abc-12345678"})
-    assert response.headers["x-request-id"] == "abc-12345678"
-    assert response.json()["requestId"] == "abc-12345678"
+def test_accepts_a_canonical_uuid_as_incoming_request_id(client: TestClient) -> None:
+    incoming = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"
+    response = client.get("/nope", headers={"X-Request-Id": incoming})
+    assert response.headers["x-request-id"] == incoming
+    assert response.json()["requestId"] == incoming
 
 
-@pytest.mark.parametrize("bad", ["short", "has space 12345678", "x" * 65, "evilé-12345678"])
+@pytest.mark.parametrize(
+    "bad", ["short", "has space 12345678", "x" * 65, "evilé-12345678", "abc-12345678"]
+)
 def test_replaces_a_malformed_incoming_request_id(client: TestClient, bad: str) -> None:
     response = client.get("/nope", headers=[(b"x-request-id", bad.encode("latin-1"))])
     assert response.headers["x-request-id"] != bad

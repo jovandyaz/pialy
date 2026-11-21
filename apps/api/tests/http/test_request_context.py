@@ -16,6 +16,10 @@ from pialy.config import Settings
 from pialy.main import create_app
 from pialy.observability.logging import bind, configure_logging, request_id
 
+FIRST_ID = "00000000-0000-4000-8000-000000000001"
+SECOND_ID = "00000000-0000-4000-8000-000000000002"
+THIRD_ID = "00000000-0000-4000-8000-000000000003"
+
 
 def make_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     monkeypatch.setenv("ENV", "test")
@@ -46,8 +50,8 @@ def test_overlapping_requests_keep_their_own_id_and_bound_fields(
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             await asyncio.gather(
                 *(
-                    client.get("/who", headers={"X-Request-Id": f"req-{n}0000000", "X-Caller": n})
-                    for n in ("1", "2")
+                    client.get("/who", headers={"X-Request-Id": rid, "X-Caller": caller})
+                    for rid, caller in ((FIRST_ID, "1"), (SECOND_ID, "2"))
                 )
             )
 
@@ -55,8 +59,8 @@ def test_overlapping_requests_keep_their_own_id_and_bound_fields(
     asyncio.run(run())
     handled = log_lines(capsys, "handler")
     assert sorted((line["request_id"], line["caller"]) for line in handled) == [
-        ("req-10000000", "1"),
-        ("req-20000000", "2"),
+        (FIRST_ID, "1"),
+        (SECOND_ID, "2"),
     ]
 
 
@@ -75,7 +79,7 @@ def test_the_context_is_reset_once_the_request_ends(
         # would still be set here, and would tag every later line of this task.
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            await client.get("/bind", headers={"X-Request-Id": "req-30000000"})
+            await client.get("/bind", headers={"X-Request-Id": THIRD_ID})
         logging.getLogger("after").info("after the request")
         return request_id.get()
 
