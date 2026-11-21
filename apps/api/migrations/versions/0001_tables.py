@@ -22,6 +22,7 @@ Rules the tables follow (tests/db/test_schema.py checks each one):
 Row-level security, grants and definer functions come in 0002; the agent's tables in layer 2.
 """
 
+from decimal import Decimal
 from importlib.resources import files
 
 from alembic import op
@@ -41,8 +42,13 @@ CURRENCY = r"~ '^[A-Z]{3}$'"
 # alone are refused: that is the shape of a phone or a CLABE.
 PROVIDER_ID = r"^[0-9A-Za-z_-]{8,64}$"
 DIGITS_ONLY = r"^[0-9]+$"
-# datePaid: Unix seconds, an integer.
-UNIX_SECONDS = r"^[0-9]{1,10}$"
+# amount: pesos as pey sends them, to the centavo, under 10 million: far above any CoDi payment
+# and below a 10-digit phone written as a number.
+AMOUNT_BELOW = 10_000_000
+# datePaid: integer Unix seconds (pey's fixtures: 1790724818 is 2026-09-29), from 2020-01-01 up
+# to 2100-01-01. Milliseconds, or a phone (5512345678 is in 2144) or a CLABE as a number, fall out.
+DATE_PAID_FROM = 1_577_836_800
+DATE_PAID_BELOW = 4_102_444_800
 # metadata.bankCode: the payer's bank, by its 3-digit code (as in a CLABE) or 5-digit SPEI one.
 BANK_CODE = r"^[0-9]{3,5}$"
 # metadata.trackingKey: the SPEI clave de rastreo, up to 30 alphanumeric characters
@@ -66,6 +72,17 @@ def member(
     tests += [f"{text} !~ '{unless}'"] if unless else []
     matches = " AND ".join(tests) or "true"
     return f"CASE WHEN jsonb_typeof({value}) IN ({kinds}) THEN {matches} ELSE {value} IS NULL END"
+
+
+def number(key: str, least: Decimal | int, below: int, places: int) -> str:
+    """SQL that holds when raw has no key, or a number from least up to (not including) below,
+    with at most places decimals. CASE keeps the cast, which raises on a non-number, guarded."""
+    value = f"(raw -> '{key}')::numeric"
+    return (
+        f"CASE jsonb_typeof(raw -> '{key}') WHEN 'number' THEN {value} >= {least}"
+        f" AND {value} < {below} AND {value} = trunc({value}, {places})"
+        f" ELSE raw -> '{key}' IS NULL END"
+    )
 
 
 STATEMENTS = (
@@ -269,12 +286,8 @@ STATEMENTS = (
                         - ARRAY['clabe', 'bankCode', 'trackingKey', 'attemptId']) = '{{}}'
                     AND {member("transactionId", ("string",), PROVIDER_ID, DIGITS_ONLY)}
                     AND {member("codiQrId", ("string",), PROVIDER_ID, DIGITS_ONLY)}
-                    AND CASE jsonb_typeof(raw -> 'amount')
-                        WHEN 'number' THEN (raw -> 'amount')::numeric > 0
-                            AND (raw -> 'amount')::numeric = trunc((raw -> 'amount')::numeric, 2)
-                        ELSE raw -> 'amount' IS NULL
-                    END
-                    AND {member("datePaid", ("number",), UNIX_SECONDS)}
+                    AND {number("amount", Decimal("0.01"), AMOUNT_BELOW, 2)}
+                    AND {number("datePaid", DATE_PAID_FROM, DATE_PAID_BELOW, 0)}
                     AND {member("metadata,clabe", ("string",))}
                     AND {member("metadata,bankCode", ("string", "number"), BANK_CODE)}
                     AND {member("metadata,trackingKey", ("string",), TRACKING_KEY, ACCOUNT_NUMBER)}

@@ -36,6 +36,7 @@ MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 T0 = datetime(2026, 11, 20, 15, 0, tzinfo=UTC)
 SALT = b"schema-tests-only-salt"
 CLABE = "123456789012345678"
+PHONE = "5512345678"
 MASKED_CLABE = "**************5678"
 
 # Tables whose rows belong to one business; Task 5 puts row-level security on each.
@@ -888,6 +889,8 @@ def test_bookings_are_found_by_their_intent(owner_db: Database) -> None:
         with_metadata(trackingKey="A" * 30),
         with_metadata(trackingKey="12345678901234"),
         with_metadata(trackingKey="TRACK1234567890123456"),
+        SANITIZED_QR | {"amount": 9_999_999.99, "datePaid": 1_577_836_800},
+        SANITIZED_QR | {"datePaid": 4_102_444_799},
         SANITIZED_QR
         | {"transactionId": "txn_2026-AbCdEf0123456789", "codiQrId": "qr_0A1b2C3d4E5f"},
         SANITIZED_QR | {"transactionId": "T" * 64, "codiQrId": "Q" * 64},
@@ -906,6 +909,8 @@ def test_bookings_are_found_by_their_intent(owner_db: Database) -> None:
         "longest-tracking-key",
         "longest-digits-only-tracking-key",
         "tracking-key-with-letters-and-a-digit-run",
+        "largest-amount-first-second-of-2020",
+        "last-second-before-2100",
         "new-format-ids",
         "longest-ids",
         "shortest-ids",
@@ -956,6 +961,8 @@ def test_payment_events_reject_fields_outside_the_projection(
 # carry a phone, a CLABE or anything else. pey's ids are opaque strings: any format is taken but
 # digits alone, the shape of a phone or a CLABE. A tracking key may be digits alone, as the
 # fixture's is, but not 15 or more of them: the length of a CLABE (18) or a card (15 to 19).
+# amount (pesos) and datePaid (Unix seconds) stay within plausible bounds, below the size of a
+# phone or a CLABE written as a number.
 MALFORMED_FIELDS: list[tuple[str, dict[str, object]]] = [
     ("clabe-in-bank-code", with_metadata(bankCode=CLABE)),
     ("clabe-number-in-bank-code", with_metadata(bankCode=int(CLABE))),
@@ -979,8 +986,16 @@ MALFORMED_FIELDS: list[tuple[str, dict[str, object]]] = [
     ("amount-zero", SANITIZED_QR | {"amount": 0}),
     ("amount-negative", SANITIZED_QR | {"amount": -1}),
     ("amount-below-a-centavo", SANITIZED_QR | {"amount": 0.001}),
+    ("amount-ten-million", SANITIZED_QR | {"amount": 10_000_000}),
+    ("amount-phone", SANITIZED_QR | {"amount": int(PHONE)}),
+    ("amount-clabe", SANITIZED_QR | {"amount": int(CLABE)}),
     ("date-paid-string", SANITIZED_QR | {"datePaid": "1790724818"}),
     ("date-paid-fraction", SANITIZED_QR | {"datePaid": 1790724818.5}),
+    ("date-paid-before-2020", SANITIZED_QR | {"datePaid": 1_577_836_799}),
+    ("date-paid-2100", SANITIZED_QR | {"datePaid": 4_102_444_800}),
+    ("date-paid-milliseconds", SANITIZED_QR | {"datePaid": 1_790_724_818_000}),
+    ("date-paid-phone", SANITIZED_QR | {"datePaid": int(PHONE)}),
+    ("date-paid-clabe", SANITIZED_QR | {"datePaid": int(CLABE)}),
     ("tracking-key-boolean", with_metadata(trackingKey=True)),
     ("tracking-key-number", with_metadata(trackingKey=192191042)),
     ("tracking-key-spaces", with_metadata(trackingKey="0192 191042")),
