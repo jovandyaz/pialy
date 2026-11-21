@@ -4,12 +4,15 @@ TEST_DATABASE_URL is an admin (superuser) URL; `pnpm api:test` points it at the
 docker-compose.test.yml Postgres. Without it these tests are skipped. The session gets its own
 throwaway database owned by `pialy_owner`, migrated to head as `pialy_owner`, and served to the
 tests as `pialy_app` (not superuser, not owner, no BYPASSRLS). The database is dropped at the end.
-Point TEST_DATABASE_URL only at a disposable cluster: the two roles are cluster-wide, and their
-passwords are reset to the synthetic ones below.
+The two roles are cluster-wide and their passwords are reset to the synthetic ones below, so the
+fixtures refuse (fail, not skip) a cluster that is not on this machine unless
+PIALY_TEST_DB_DISPOSABLE=1 marks it disposable, as for a CI job that reaches its Postgres service
+container by label. Loopback alone cannot tell the test cluster from a local dev one.
 """
 
+import ipaddress
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +23,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from psycopg import sql
-from psycopg.conninfo import make_conninfo
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from pydantic import SecretStr
 
 from pialy.config import Settings
@@ -34,6 +37,7 @@ SKIP_REASON = (
 # Synthetic, test-only passwords; the roles live in the throwaway test cluster only.
 ROLE_PASSWORDS = {"pialy_owner": "pialy-owner-test-only", "pialy_app": "pialy-app-test-only"}
 ROLES_LOCK_KEY = 7_400_231  # serializes role setup between test sessions sharing a cluster
+DISPOSABLE_OPT_IN = "PIALY_TEST_DB_DISPOSABLE"
 
 type AppDatabaseFactory = Callable[[Path], AbstractContextManager[str]]
 
@@ -121,11 +125,47 @@ def app_settings(app_url: str) -> Settings:
     return Settings(env="test", database_url=SecretStr(app_url))
 
 
+def _is_on_this_machine(host: str) -> bool:
+    if host in ("", "localhost") or host.startswith("/"):  # no host or a path: a Unix socket
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _refuse_unless_disposable(admin_url: str, environ: Mapping[str, str]) -> None:
+    """Fail unless the cluster is on this machine or explicitly marked disposable."""
+    if environ.get(DISPOSABLE_OPT_IN) == "1":
+        return
+    params = conninfo_to_dict(admin_url)
+    hosts = [
+        host.strip()
+        for key in ("host", "hostaddr")
+        for host in str(params.get(key) or "").split(",")
+    ]
+    remote = sorted({host for host in hosts if not _is_on_this_machine(host)})
+    if remote:
+        pytest.fail(
+            f"TEST_DATABASE_URL points at {', '.join(remote)}, not at this machine. The db "
+            "fixtures reset the pialy_owner and pialy_app passwords cluster-wide, so they only run "
+            "against localhost, 127.0.0.1 or ::1, or a cluster marked disposable with "
+            f"{DISPOSABLE_OPT_IN}=1.",
+            pytrace=False,
+        )
+
+
+@pytest.fixture(scope="session")
+def refuse_unless_disposable() -> Callable[[str, Mapping[str, str]], None]:
+    return _refuse_unless_disposable
+
+
 @pytest.fixture(scope="session")
 def admin_url() -> str:
     url = os.environ.get("TEST_DATABASE_URL")
     if not url:
         pytest.skip(SKIP_REASON)
+    _refuse_unless_disposable(url, os.environ)
     return url
 
 

@@ -2,6 +2,11 @@
 
 Migrations run as the owner role, from MIGRATION_DATABASE_URL (any libpq connection string).
 All pending revisions run in one transaction: a failing one leaves the schema as it was.
+
+Online-migration limits, set before any revision runs:
+- lock_timeout 5s: DDL waiting for a lock held by live traffic gives up (and the deploy fails)
+  instead of queueing every later query on that table behind its ACCESS EXCLUSIVE request.
+- statement_timeout 5min: generous room for a backfill, but no statement runs unbounded.
 """
 
 import os
@@ -36,6 +41,8 @@ def run_migrations_online() -> None:
     with engine.connect() as connection:
         context.configure(connection=connection, target_metadata=None)
         with context.begin_transaction():
+            connection.exec_driver_sql("SET lock_timeout = '5s'")
+            connection.exec_driver_sql("SET statement_timeout = '5min'")
             context.run_migrations()
 
 

@@ -22,6 +22,11 @@ POOL_MAX_SIZE = 10
 LOCK_POOL_MIN_SIZE = 1
 LOCK_POOL_MAX_SIZE = 4
 CONNECT_TIMEOUT_SECONDS = 5
+# Longest wait for a pooled connection before PoolTimeout (psycopg's default is 30 s), so a
+# request fails fast when the pool is exhausted or the database is down.
+POOL_TIMEOUT_SECONDS = 3.0
+# Waiting for a lock connection is bounded like waiting for the lock itself (lock_timeout).
+LOCK_POOL_TIMEOUT_SECONDS = 2.0
 
 type PgConnection = Connection[TupleRow]
 
@@ -49,6 +54,7 @@ class Database:
             max_size=POOL_MAX_SIZE,
             open=False,
             configure=_set_time_limits,
+            timeout=POOL_TIMEOUT_SECONDS,
             name="pialy",
         )
         # Session-level advisory locks outlive transactions, so these connections autocommit
@@ -61,6 +67,7 @@ class Database:
             open=False,
             configure=_set_time_limits,
             reset=_release_advisory_locks,
+            timeout=LOCK_POOL_TIMEOUT_SECONDS,
             name="pialy-locks",
         )
 
@@ -98,7 +105,7 @@ class Database:
     def system(self, timeout: float | None = None) -> Iterator[PgConnection]:
         """One transaction with no business: only definer functions and non-tenant tables.
 
-        `timeout` bounds the wait for a pooled connection (the pool's default otherwise).
+        `timeout` bounds the wait for a pooled connection (POOL_TIMEOUT_SECONDS otherwise).
         """
         with self._transaction(timeout) as connection:
             yield connection

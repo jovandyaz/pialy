@@ -1,4 +1,4 @@
-"""/readyz against a real database, served as pialy_app through the app's own Database."""
+"""migrations/env.py and /readyz against real databases (the app served as pialy_app)."""
 
 import shutil
 from collections.abc import Callable, Iterator
@@ -15,16 +15,29 @@ from pialy.main import create_app
 MIGRATIONS_DIR = Path(__file__).resolve().parents[2] / "migrations"
 
 
-def add_revision(migrations: Path, revision: str, down: str | None) -> None:
-    migrations.joinpath("versions", f"{revision}_noop.py").write_text(
-        f'"""No-op revision for readiness tests."""\n\nrevision = "{revision}"\n'
+# Fails the migration unless env.py set the limits for online migrations.
+ASSERT_MIGRATION_LIMITS = """
+DO $$
+BEGIN
+  IF current_setting('lock_timeout') <> '5s' OR current_setting('statement_timeout') <> '5min' THEN
+    RAISE EXCEPTION 'lock_timeout=%, statement_timeout=%',
+      current_setting('lock_timeout'), current_setting('statement_timeout');
+  END IF;
+END $$
+"""
+
+
+def add_revision(migrations: Path, revision: str, down: str | None, upgrade_sql: str = "") -> None:
+    body = f"    op.execute({upgrade_sql!r})\n" if upgrade_sql else "    pass\n"
+    migrations.joinpath("versions", f"{revision}_test.py").write_text(
+        f'"""Revision written by a test."""\n\nfrom alembic import op\n\nrevision = "{revision}"\n'
         f"down_revision = {down!r}\nbranch_labels = None\ndepends_on = None\n\n\n"
-        "def upgrade() -> None:\n    pass\n"
+        f"def upgrade() -> None:\n{body}"
     )
 
 
 def migrations_with(directory: Path, revisions: list[str]) -> Path:
-    """The real env.py with no-op revisions, so the test does not depend on the schema."""
+    """The real env.py with no-op revisions, so the tests do not depend on the schema."""
     directory.joinpath("versions").mkdir(parents=True)
     shutil.copy(MIGRATIONS_DIR / "env.py", directory / "env.py")
     down: str | None = None
@@ -70,3 +83,12 @@ def test_readyz_is_503_when_the_code_is_ahead_of_the_database(
     add_revision(ahead, "r0002", "r0001")
     with client_for(monkeypatch, app_url, ahead) as client:
         assert client.get("/readyz").status_code == 503
+
+
+def test_migrations_run_with_lock_and_statement_timeouts(
+    app_database_at: Callable[[Path], AbstractContextManager[str]], tmp_path: Path
+) -> None:
+    migrations = migrations_with(tmp_path / "migrations", [])
+    add_revision(migrations, "r0001", None, ASSERT_MIGRATION_LIMITS)
+    with app_database_at(migrations):
+        pass  # the upgrade raised inside the factory if the limits were missing

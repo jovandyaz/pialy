@@ -1,9 +1,12 @@
 import time
+from collections.abc import Callable
+from contextlib import AbstractContextManager, ExitStack
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
 from psycopg import errors
+from psycopg_pool import PoolTimeout
 
 from pialy.db.database import Database
 from pialy.db.locks import advisory_key
@@ -124,3 +127,27 @@ def test_lock_connection_returns_to_the_pool_without_its_locks(db: Database) -> 
             break
         time.sleep(0.05)
     assert free == (True,)
+
+
+def seconds_to_time_out(
+    connect: Callable[[], AbstractContextManager[object]], holders: int
+) -> float:
+    """Hold `holders` connections from `connect`, then time how long one more waits."""
+    with ExitStack() as held:
+        for _ in range(holders):
+            held.enter_context(connect())
+        started = time.monotonic()
+        with pytest.raises(PoolTimeout), connect():
+            pass
+        return time.monotonic() - started
+
+
+def test_waiting_for_a_connection_is_bounded(db: Database) -> None:
+    # A request gives up after 3 s instead of psycopg's default 30 s (Review Focus 3).
+    waited = seconds_to_time_out(db.system, holders=10)
+    assert 3 <= waited < 4
+
+
+def test_waiting_for_a_lock_connection_is_bounded_by_lock_timeout(db: Database) -> None:
+    waited = seconds_to_time_out(db.lock_connection, holders=4)
+    assert 2 <= waited < 3
