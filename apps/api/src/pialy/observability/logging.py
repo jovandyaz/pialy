@@ -46,9 +46,12 @@ _PHONE = re.compile(
 )
 # A maximal run of digit groups joined by single spaces, dots or dashes: a CLABE or a card number
 # written in groups. Linear: the groups and the separators never overlap, so nothing backtracks.
+# Redaction fails closed: from 15 digits (the shortest card) a run is redacted whole, however
+# long, so a number glued to an account cannot shelter part of it. Runs made only of ISO dates
+# are exempt.
 _DIGIT_CHAIN = re.compile(r"(?<!\d)\d+(?:[ .-]\d+)*")
 _DATES_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}(?:[ .-]\d{4}-\d{2}-\d{2})+")
-ACCOUNT_DIGITS = range(15, 20)  # a card has 15 to 19 digits, a CLABE 18
+MIN_ACCOUNT_DIGITS = 15
 _HEX = "[0-9a-fA-F]"
 # A canonical UUID is an identifier, not a secret: it stays readable in logs.
 _UUID = re.compile(
@@ -64,7 +67,7 @@ def _shorten_token(match: re.Match[str]) -> str:
 def _redact_digit_chain(match: re.Match[str]) -> str:
     chain = match[0]
     digits = sum(1 for char in chain if char not in " .-")
-    if digits in ACCOUNT_DIGITS and not _DATES_ONLY.fullmatch(chain):
+    if digits >= MIN_ACCOUNT_DIGITS and not _DATES_ONLY.fullmatch(chain):
         return "[digits]"
     return chain
 

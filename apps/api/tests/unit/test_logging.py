@@ -259,6 +259,20 @@ def test_spaced_account_and_card_numbers_are_redacted_whole(account: str) -> Non
     assert redact(f"{account}, then") == "[digits], then"
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("amount 12 0121 8001 2345 6789 12 ok", "amount [digits] ok"),  # 20 digits
+        ("1234 5678 9012 3456 7890", "[digits]"),
+        ("55 1234 5678 55 8765 4321", "[digits]"),  # two phones in a row
+        ("ids " + " ".join(["12345"] * 10), "ids [digits]"),  # 50 digits
+        ("2026-11-15 12 0121 8001 2345 6789 12", "[digits]"),  # a date does not shelter the rest
+    ],
+)
+def test_digit_chains_of_15_or_more_digits_are_redacted_whole(text: str, expected: str) -> None:
+    assert redact(text) == expected
+
+
 def test_spaced_account_next_to_a_phone_redacts_both() -> None:
     assert (
         redact("call 55 1234 5678 or pay 0121 8001 2345 6789 12") == "call [digits] or pay [digits]"
@@ -275,6 +289,7 @@ def test_spaced_account_next_to_a_phone_redacts_both() -> None:
         "date=2026-11-15",
         "range 2026-11-15 2026-11-16",
         "range 2026-11-15-2026-11-16",
+        "days 2026-11-15 2026-11-16 2026-11-17 2026-11-18",
         "ip 192.168.100.200",
         "version 1.2.3.4.5",
         "build 20261121-0148",
@@ -305,6 +320,8 @@ ADVERSARIAL_INPUTS = {
     "spaced_digits": "1 " * 50_000,
     "dashed_digits": "1-" * 50_000,
     "dotted_digits": "1." * 50_000,
+    "date_chain": "2026-11-15 " * 9_000,
+    "date_chain_with_tail": "2026-11-15 " * 9_000 + "1",
     "path_prefixes": "/c/" * 33_333,
     "path_tokens": "/c/a" * 25_000,
     "uuid_shapes": (UUID[:-1] + "-") * 2_700,
