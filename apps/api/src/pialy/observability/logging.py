@@ -43,9 +43,8 @@ _EMAIL = re.compile(r"[\w.+-]{1,64}@[\w-]++(?:\.[\w-]++)+")
 # absolute path (`/...`) may also hold token segments. Measured on 3,000,000 random unpadded
 # standard-base64 keys of 32 to 64 characters, none passes for a path (two short lowercase chunks
 # are not that rare in a key, a leading `/` plus two of them is); a 32-byte key always has padding.
-# Inside a path (or a shorter run), a segment of 16 or more characters after a `/` is a bearer
-# token (a booking token is 22) and keeps only its first 4 characters, wherever the route puts it;
-# a segment of 32 or more at the start of the run is a token too. Canonical UUIDs never get here.
+# Inside a path (or a shorter run), each segment of 16 or more characters is judged on its own
+# (`_redact_segment`). Canonical UUIDs never get here.
 # Linear: runs never overlap, and the lookbehind stops a failed match from restarting inside one.
 LOGGED_TOKEN_CHARS = 4
 MIN_PATH_TOKEN_CHARS = 16
@@ -98,9 +97,20 @@ def _is_path(run: str, segments: list[str]) -> bool:
 
 
 def _redact_segment(segment: str, after_slash: bool) -> str:
-    if after_slash and len(segment) >= MIN_PATH_TOKEN_CHARS:
-        return f"{segment[:LOGGED_TOKEN_CHARS]}…"
-    return "[token]" if len(segment) >= MIN_TOKEN_CHARS else segment
+    """One `/` segment of a run: kept, replaced, or truncated to its first 4 characters.
+
+    After a `/`, a segment of 16 or more characters is a bearer token (a booking token is 22),
+    wherever the route puts it, and keeps 4 characters; one with 10 or more digits becomes
+    `[digits]` instead (a CLABE as a route parameter: its first 4 digits name the bank). At the
+    start of a run, 32 or more is a key; anything shorter there is left to the digit rule.
+    """
+    if len(segment) < MIN_PATH_TOKEN_CHARS:
+        return segment
+    if not after_slash:
+        return "[token]" if len(segment) >= MIN_TOKEN_CHARS else segment
+    if sum(char.isdecimal() for char in segment) >= MIN_DIGITS:
+        return "[digits]"
+    return f"{segment[:LOGGED_TOKEN_CHARS]}…"
 
 
 def _redact_run(match: re.Match[str]) -> str:

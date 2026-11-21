@@ -123,13 +123,30 @@ def test_truncates_booking_token_in_url_to_4_chars() -> None:
         ("/x/abcdefghijklmnop", "/x/abcd…"),  # 16 characters
         ("/x/abcdefghijklmno", "/x/abcdefghijklmno"),  # 15 characters
         (f"/api/bookings/{UUID}/events", f"/api/bookings/{UUID}/events"),  # canonical UUID
-        (f"/api/bookings/{UUID}x", "/api/bookings/3f25…"),  # not a canonical UUID
+        (f"/api/bookings/{UUID}x", "/api/bookings/[digits]"),  # not a canonical UUID
         ("/api/b/panaderia/slots?date=2026-11-15", "/api/b/panaderia/slots?date=2026-11-15"),
     ],
 )
 def test_any_path_segment_of_16_or_more_token_characters_is_truncated(
     path: str, expected: str
 ) -> None:
+    assert redact(f"GET {path}") == f"GET {expected}"
+
+
+@pytest.mark.parametrize(
+    "path, expected",
+    [
+        (f"/api/accounts/{CLABE}", "/api/accounts/[digits]"),
+        (f"/api/accounts/{CLABE}/payouts", "/api/accounts/[digits]/payouts"),
+        (f"/api/accounts/clabe-{CLABE}", "/api/accounts/[digits]"),
+        ("/api/accounts/Ab12345678901234", "/api/accounts/[digits]"),  # 16 characters, 14 digits
+        ("/api/accounts/Abcdefg123456789", "/api/accounts/Abcd…"),  # 9 digits: a token
+    ],
+)
+def test_a_path_segment_with_10_or_more_digits_is_redacted_as_digits(
+    path: str, expected: str
+) -> None:
+    # Truncated to 4 characters, a CLABE would still show its bank and plaza digits.
     assert redact(f"GET {path}") == f"GET {expected}"
 
 
@@ -792,6 +809,7 @@ ADVERSARIAL_INPUTS = {
     "path_tokens": "/c/a" * 25_000,
     "uuid_shapes": (UUID[:-1] + "-") * 2_700,
     "just_under_token": ("a" * 31 + " ") * 3_125,
+    "clabe_segments": f"/api/accounts/{CLABE}" * 3_100,
 }
 
 
