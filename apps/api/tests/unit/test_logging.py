@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import io
 import json
 import logging
 import time
@@ -8,7 +9,9 @@ from collections.abc import Iterator
 
 import pytest
 
+from pialy.observability import logging as logging_module
 from pialy.observability.logging import (
+    JsonFormatter,
     bind,
     bind_route,
     configure_logging,
@@ -291,6 +294,82 @@ def test_odd_event_field_values_do_not_raise_into_the_caller(
     assert line["message"] == "x.happened"  # not the whole-record fallback
     assert line["big"] == "[unrepresentable]"
     assert line["note"] == "kept"
+
+
+def test_the_formatter_alone_redacts_everything(context: None) -> None:
+    # Any handler that formats with JsonFormatter, filter or not, emits only redacted text.
+    stream = io.StringIO()
+    handler = logging.StreamHandler(stream)
+    handler.setFormatter(JsonFormatter())
+    logger = logging.getLogger("bare")
+    logger.addHandler(handler)
+    logger.propagate = False
+    try:
+        bind(user=EMAIL)
+        try:
+            raise ValueError(f"bad {PHONE}")
+        except ValueError:
+            logger.exception("mail %s tok %s", EMAIL, TOKEN, stack_info=True)
+        log_event_line = logging.LogRecord("bare", logging.INFO, __file__, 1, CLABE, None, None)
+        logger.handle(log_event_line)
+    finally:
+        logger.removeHandler(handler)
+        logger.propagate = True
+    out = stream.getvalue()
+    for leaked in (PHONE, EMAIL, TOKEN, CLABE):
+        assert leaked not in out
+    first, second = (json.loads(line) for line in out.splitlines())
+    assert first["message"] == "mail [email] tok [token]"
+    assert first["user"] == "[email]"
+    assert "bad [digits]" in first["exc"]
+    assert "stack" in first
+    assert second["message"] == "[digits]"
+
+
+def test_the_root_handler_redacts_in_its_formatter_and_has_no_filter() -> None:
+    configure_logging("INFO")
+    [handler] = logging.getLogger().handlers
+    assert isinstance(handler.formatter, JsonFormatter)
+    assert handler.filters == []
+
+
+def test_each_value_is_redacted_exactly_once(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], context: None
+) -> None:
+    seen: list[str] = []
+
+    def counting_redact(text: str) -> str:
+        seen.append(text)
+        return redact(text)
+
+    configure_logging("INFO")
+    monkeypatch.setattr(logging_module, "redact", counting_redact)
+    bind(note=f"bound {PHONE}")
+    log_event("x.happened", field=f"event {PHONE}")
+    [line] = lines(capsys)
+    assert line["note"] == "bound [digits]"
+    assert line["field"] == "event [digits]"
+    assert seen.count(f"bound {PHONE}") == 1
+    assert seen.count(f"event {PHONE}") == 1
+    assert not [text for text in seen if "[digits]" in text]  # never fed its own output
+
+
+def test_a_failing_stream_never_prints_the_raw_record(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # The stdlib `Handler.handleError` writes the raw message and args to stderr.
+    class BrokenStream(io.StringIO):
+        def write(self, text: str) -> int:
+            raise OSError("stream closed")
+
+    configure_logging("INFO")
+    [handler] = logging.getLogger().handlers
+    assert isinstance(handler, logging.StreamHandler)
+    handler.setStream(BrokenStream())
+    logging.getLogger("x").info("call %s", PHONE)
+    captured = capsys.readouterr()
+    assert PHONE not in captured.err
+    assert PHONE not in captured.out
 
 
 def test_level_filters_and_rejects_unknown(capsys: pytest.CaptureFixture[str]) -> None:

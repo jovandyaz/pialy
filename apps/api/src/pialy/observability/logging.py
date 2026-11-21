@@ -1,11 +1,12 @@
 """JSON logs on stdout with redaction of personal data and secrets.
 
-Every line carries the request id and the fields bound for the request. The redaction
-filter runs on the message, the exception text and the event fields, and the formatter on every
-extra field (event, bound and route), so a phone, an email, a token or a CLABE inside an
-exception message or a bound value never reaches the output.
+Every line carries the request id and the fields bound for the request. `JsonFormatter` is the
+one place that redacts: the message, the exception and stack text, and every event, bound and
+route field go through `redact` once, so a phone, an email, a token or a CLABE inside an exception
+message or a bound value never reaches the output.
 """
 
+import contextlib
 import json
 import logging
 import re
@@ -13,6 +14,7 @@ import sys
 from collections.abc import Callable, Mapping
 from contextvars import ContextVar
 from datetime import UTC, datetime
+from typing import TextIO
 
 request_id: ContextVar[str] = ContextVar("request_id", default="-")
 # One mutable dict per request: a handler running in a threadpool (copied context) binds into
@@ -188,9 +190,9 @@ FORMAT_ERROR_MARKER = " [log format error]"
 def _message_of(record: logging.LogRecord) -> str:
     """The formatted message; a broken format call yields the bare template plus a marker.
 
-    The stdlib shields callers from this error inside `Handler.emit` (`handleError`), but a
-    filter runs outside it, so a `logger.info("%d", "abc")` would raise into a request. The
-    fallback leaves the args out: they are what failed to format and may hold personal data.
+    A `logger.info("%d", "abc")` keeps its line instead of reaching `Handler.handleError`, which
+    would print the raw arguments. The fallback leaves the args out: they are what failed to
+    format and may hold personal data.
     """
     try:
         return record.getMessage()
@@ -202,41 +204,6 @@ def _message_of(record: logging.LogRecord) -> str:
 
 
 UNREDACTABLE_MESSAGE = "[log record could not be redacted]"
-
-
-class RedactingFilter(logging.Filter):
-    """Rewrite the record so that nothing downstream can see the unredacted text.
-
-    Never raises: a logging call must not fail the code that made it. If redacting a record
-    fails for any reason, the line is kept but its content is replaced by a fixed marker.
-    """
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            self._redact(record)
-        except Exception:  # last resort: drop everything that could not be redacted
-            record.msg = UNREDACTABLE_MESSAGE
-            record.args = None
-            record.exc_info = None
-            record.exc_text = None
-            record.stack_info = None
-            setattr(record, _FIELDS_ATTR, {})
-        return True
-
-    @staticmethod
-    def _redact(record: logging.LogRecord) -> None:
-        record.msg = redact(_message_of(record))
-        record.args = None
-        if record.exc_info:
-            record.exc_text = logging.Formatter().formatException(record.exc_info)
-            record.exc_info = None
-        if record.exc_text:
-            record.exc_text = redact(record.exc_text)
-        if record.stack_info:
-            record.stack_info = redact(record.stack_info)
-        fields: Mapping[str, object] | None = getattr(record, _FIELDS_ATTR, None)
-        if fields is not None:
-            setattr(record, _FIELDS_ATTR, {k: redact_value(v) for k, v in fields.items()})
 
 
 UNREPRESENTABLE = "[unrepresentable]"
@@ -270,33 +237,63 @@ _RESERVED_KEYS = frozenset(
 
 
 class JsonFormatter(logging.Formatter):
+    """One JSON line per record, and the only place that redacts.
+
+    Every value is redacted once, here: the message, the exception and stack text, the event,
+    bound and route fields. The record itself is left as it is, so any handler that formats with
+    this class emits redacted text whether or not it has a filter. Never raises: a log call must
+    not fail its caller, and a record that cannot be redacted becomes a fixed marker line.
+    """
+
     def format(self, record: logging.LogRecord) -> str:
-        fields: Mapping[str, object] = getattr(record, _FIELDS_ATTR, {})
+        try:
+            return json.dumps(self._payload(record), ensure_ascii=False, default=str)
+        except Exception:  # last resort: drop everything that could not be redacted
+            return json.dumps(
+                {**self._base(record), "message": UNREDACTABLE_MESSAGE}, ensure_ascii=False
+            )
+
+    @staticmethod
+    def _base(record: logging.LogRecord) -> dict[str, object]:
+        return {
+            "ts": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds"),
+            "level": record.levelname,
+            "logger": record.name,
+            "request_id": request_id.get(),  # validated when the request starts
+        }
+
+    def _payload(self, record: logging.LogRecord) -> dict[str, object]:
+        fields: Mapping[str, object] = getattr(record, _FIELDS_ATTR, None) or {}
         extras: dict[str, object] = {"business_id": "", **fields}  # empty until tenancy binds it
         resolver = _route.get()
         if resolver is not None:
             extras["route"] = resolver()
         extras.update(_bound.get() or {})
         payload: dict[str, object] = {
-            "ts": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds"),
-            "level": record.levelname,
-            "logger": record.name,
-            "message": record.getMessage(),
-            "request_id": request_id.get(),
+            **self._base(record),
+            "message": redact(_message_of(record)),
             **{
-                key: redact_value(value)  # fail closed: bound and route values are not filtered
+                key: redact_value(value)
                 for key, value in extras.items()
                 if key not in _RESERVED_KEYS
             },
         }
         event: str | None = getattr(record, _EVENT_ATTR, None)
         if event is not None:
-            payload["event"] = event
-        if record.exc_text:
-            payload["exc"] = record.exc_text
+            payload["event"] = redact(event)
+        exc_text = self.formatException(record.exc_info) if record.exc_info else record.exc_text
+        if exc_text:
+            payload["exc"] = redact(exc_text)
         if record.stack_info:
-            payload["stack"] = record.stack_info
-        return json.dumps(payload, ensure_ascii=False, default=str)
+            payload["stack"] = redact(self.formatStack(record.stack_info))
+        return payload
+
+
+class _JsonStreamHandler(logging.StreamHandler[TextIO]):
+    def handleError(self, record: logging.LogRecord) -> None:
+        """Report a failed write without the record: the stdlib prints its raw message and args."""
+        with contextlib.suppress(Exception):  # nowhere left to report to
+            sys.stderr.write("--- Logging error: a log line could not be written ---\n")
 
 
 def configure_logging(level: str) -> None:
@@ -304,8 +301,7 @@ def configure_logging(level: str) -> None:
     name = level.upper()
     if name not in logging.getLevelNamesMapping():
         raise ValueError(f"unknown log level: {level!r}")
-    handler = logging.StreamHandler(sys.stdout)
-    handler.addFilter(RedactingFilter())
+    handler = _JsonStreamHandler(sys.stdout)
     handler.setFormatter(JsonFormatter())
     root = logging.getLogger()
     root.handlers[:] = [handler]
