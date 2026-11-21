@@ -886,6 +886,10 @@ def test_bookings_are_found_by_their_intent(owner_db: Database) -> None:
         SANITIZED_QR | {"transactionId": "01m3qr8h0rh0xbckyyd242yxnv"},
         with_metadata(bankCode="002"),
         with_metadata(trackingKey="A" * 30),
+        SANITIZED_QR
+        | {"transactionId": "txn_2026-AbCdEf0123456789", "codiQrId": "qr_0A1b2C3d4E5f"},
+        SANITIZED_QR | {"transactionId": "T" * 64, "codiQrId": "Q" * 64},
+        SANITIZED_QR | {"transactionId": "01M3QR8H", "codiQrId": "35a13c18"},
     ],
     ids=[
         "push",
@@ -898,6 +902,9 @@ def test_bookings_are_found_by_their_intent(owner_db: Database) -> None:
         "lowercase-ulid",
         "three-digit-bank-code",
         "longest-tracking-key",
+        "new-format-ids",
+        "longest-ids",
+        "shortest-ids",
     ],
 )
 def test_payment_events_store_the_sanitized_projection(
@@ -942,25 +949,26 @@ def test_payment_events_reject_fields_outside_the_projection(
 
 
 # Each field of the projection keeps its documented type and shape, so an allowed key cannot
-# carry a phone, a CLABE or anything else.
+# carry a phone, a CLABE or anything else. pey's ids are opaque strings: any format is taken but
+# digits alone, the shape of a phone or a CLABE.
 MALFORMED_FIELDS: list[tuple[str, dict[str, object]]] = [
     ("clabe-in-bank-code", with_metadata(bankCode=CLABE)),
     ("clabe-number-in-bank-code", with_metadata(bankCode=int(CLABE))),
     ("phone-in-bank-code", with_metadata(bankCode="5512345678")),
     ("bank-code-too-short", with_metadata(bankCode=40)),
     ("bank-code-boolean", with_metadata(bankCode=True)),
-    ("transaction-id-not-ulid", SANITIZED_QR | {"transactionId": "tx-0001"}),
     ("transaction-id-phone", SANITIZED_QR | {"transactionId": "5512345678"}),
-    ("transaction-id-ulid-letters", SANITIZED_QR | {"transactionId": "01M3QR8H0RH0XBCKYYD242YXNI"}),
-    (
-        "transaction-id-ulid-overflow",
-        SANITIZED_QR | {"transactionId": "81M3QR8H0RH0XBCKYYD242YXNV"},
-    ),
+    ("transaction-id-clabe", SANITIZED_QR | {"transactionId": CLABE}),
+    ("transaction-id-too-short", SANITIZED_QR | {"transactionId": "tx-0001"}),
+    ("transaction-id-too-long", SANITIZED_QR | {"transactionId": "T" * 65}),
+    ("transaction-id-other-characters", SANITIZED_QR | {"transactionId": "01M3QR8H.0RH0XBCK"}),
     ("transaction-id-number", SANITIZED_QR | {"transactionId": 1790724818}),
-    ("qr-id-not-hex", SANITIZED_QR | {"codiQrId": "35a13c183z"}),
-    ("qr-id-phone", SANITIZED_QR | {"codiQrId": "5512345678x"}),
+    ("qr-id-phone", SANITIZED_QR | {"codiQrId": "5512345678"}),
+    ("qr-id-clabe", SANITIZED_QR | {"codiQrId": CLABE}),
+    ("qr-id-too-short", SANITIZED_QR | {"codiQrId": "35a13c1"}),
+    ("qr-id-too-long", SANITIZED_QR | {"codiQrId": "Q" * 65}),
+    ("qr-id-spaces", SANITIZED_QR | {"codiQrId": "35a13 c183a"}),
     ("qr-id-number", SANITIZED_QR | {"codiQrId": 3513183}),
-    ("qr-id-too-short", SANITIZED_QR | {"codiQrId": "35a13c183"}),
     ("qr-id-null", SANITIZED_QR | {"codiQrId": None}),
     ("amount-string", SANITIZED_QR | {"amount": "150"}),
     ("amount-zero", SANITIZED_QR | {"amount": 0}),

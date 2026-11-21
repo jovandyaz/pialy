@@ -36,11 +36,11 @@ CURRENCY = r"~ '^[A-Z]{3}$'"
 # Shapes of the fields payment_events.raw keeps from pey's payment payload (docs.pey.mx, API
 # 2026-10-20), matched against their text (`#>>`). A value outside them fails the insert with
 # 23514 rather than being stored; relaxing a shape takes a new revision.
-# transactionId: a ULID (github.com/ulid/spec: Crockford base32 without I, L, O and U,
-# case-insensitive, 26 characters, the first at most 7).
-ULID = r"(?i)^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
-# codiQrId: the CoDi id of the QR. Banxico publishes no format; pey's examples are 10 hex digits.
-QR_ID = r"^[0-9A-Fa-f]{10}$"
+# transactionId and codiQrId: ids pey assigns (today a ULID and the 10 hex digits of the CoDi
+# QR), taken as opaque strings so that pey changing their format never drops a payment. Digits
+# alone are refused: that is the shape of a phone or a CLABE.
+PROVIDER_ID = r"^[0-9A-Za-z_-]{8,64}$"
+DIGITS_ONLY = r"^[0-9]+$"
 # datePaid: Unix seconds, an integer.
 UNIX_SECONDS = r"^[0-9]{1,10}$"
 # metadata.bankCode: the payer's bank, by its 3-digit code (as in a CLABE) or 5-digit SPEI one.
@@ -52,12 +52,17 @@ TRACKING_KEY = r"^[0-9A-Za-z]{1,30}$"
 UUID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
 
 
-def member(path: str, types: tuple[str, ...], shape: str | None = None) -> str:
+def member(
+    path: str, types: tuple[str, ...], shape: str | None = None, unless: str | None = None
+) -> str:
     """SQL that holds when raw has nothing at path, or a value of a JSON type in types whose
-    text matches shape. A JSON null is neither, so it fails."""
+    text matches shape and not unless. A JSON null is neither, so it fails."""
     value = f"raw #> '{{{path}}}'"
+    text = f"raw #>> '{{{path}}}'"
     kinds = ", ".join(f"'{kind}'" for kind in types)
-    matches = "true" if shape is None else f"raw #>> '{{{path}}}' ~ '{shape}'"
+    tests = [f"{text} ~ '{shape}'"] if shape else []
+    tests += [f"{text} !~ '{unless}'"] if unless else []
+    matches = " AND ".join(tests) or "true"
     return f"CASE WHEN jsonb_typeof({value}) IN ({kinds}) THEN {matches} ELSE {value} IS NULL END"
 
 
@@ -260,8 +265,8 @@ STATEMENTS = (
                         = '{{}}'
                     AND (coalesce(raw -> 'metadata', '{{}}')
                         - ARRAY['clabe', 'bankCode', 'trackingKey', 'attemptId']) = '{{}}'
-                    AND {member("transactionId", ("string",), ULID)}
-                    AND {member("codiQrId", ("string",), QR_ID)}
+                    AND {member("transactionId", ("string",), PROVIDER_ID, DIGITS_ONLY)}
+                    AND {member("codiQrId", ("string",), PROVIDER_ID, DIGITS_ONLY)}
                     AND CASE jsonb_typeof(raw -> 'amount')
                         WHEN 'number' THEN (raw -> 'amount')::numeric > 0
                             AND (raw -> 'amount')::numeric = trunc((raw -> 'amount')::numeric, 2)
