@@ -99,19 +99,28 @@ def _is_path(run: str, segments: list[str]) -> bool:
     return names >= MIN_PATH_NAMES
 
 
+def _looks_random(segment: str) -> bool:
+    """A digit and an uppercase letter: words and CamelCase identifiers without digits are not."""
+    return any(char.isdigit() for char in segment) and any(char.isupper() for char in segment)
+
+
 def _redact_segment(segment: str, after_slash: bool) -> str:
     """One `/` segment of a run: kept, replaced, or truncated to its first 4 characters.
 
-    After a `/`, a segment of 16 or more characters is a bearer token (a booking token is 22),
-    wherever the route puts it, and keeps 4 characters. Before truncating: 10 or more digits
-    become `[digits]` (a CLABE as a route parameter: its first 4 digits name the bank), and a
-    lowercase name is kept. At the start of a run, 32 or more is a key; anything shorter there is
-    left to the digit rule.
+    Only a segment of 16 or more characters is judged. After a `/` it is a bearer token (a booking
+    token is 22), wherever the route puts it. Anywhere else (a message, `Bearer <token>`,
+    `?token=<token>`) it is a key at 32 or more, a token when it holds a digit and an uppercase
+    letter, and otherwise (a word, a name, a list of ISO dates) it is left to the digit rule. A
+    token keeps 4 characters, but one with 10 or more digits becomes `[digits]` (a CLABE as a
+    route parameter: its first 4 digits name the bank) and a lowercase name is kept.
     """
     if len(segment) < MIN_PATH_TOKEN_CHARS:
         return segment
     if not after_slash:
-        return "[token]" if len(segment) >= MIN_TOKEN_CHARS else segment
+        if len(segment) >= MIN_TOKEN_CHARS:
+            return "[token]"
+        if not _looks_random(segment):
+            return segment
     if sum(char.isdecimal() for char in segment) >= MIN_DIGITS:
         return "[digits]"
     if _LOWERCASE_NAME.fullmatch(segment):

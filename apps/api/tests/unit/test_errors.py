@@ -167,6 +167,14 @@ def test_scrub_event_keeps_span_identifiers_of_a_transaction() -> None:
     }
 
 
+def test_scrub_event_truncates_a_token_in_the_query_string() -> None:
+    event: dict[str, object] = {
+        "request": {"query_string": f"token={BOOKING_TOKEN}&phone={PHONE}"},
+    }
+    scrubbed = scrub_event(event, {})
+    assert dig(scrubbed, "request", "query_string") == "token=Zx9Q…&phone=[digits]"
+
+
 def test_scrub_event_keeps_file_and_module_names_of_frames() -> None:
     frames: list[dict[str, object]] = [
         {

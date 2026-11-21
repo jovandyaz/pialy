@@ -183,6 +183,57 @@ def test_file_names_stay_readable_in_a_logged_traceback(context: None) -> None:
 @pytest.mark.parametrize(
     "text, expected",
     [
+        (f"issued {BOOKING_TOKEN}", "issued Zx9Q…"),
+        (f"Authorization: Bearer {BOOKING_TOKEN}", "Authorization: Bearer Zx9Q…"),
+        (f"GET /api/verify?token={BOOKING_TOKEN}&x=1", "GET /api/verify?token=Zx9Q…&x=1"),
+        (f"token={BOOKING_TOKEN}", "token=Zx9Q…"),
+        (f'{{"token": "{BOOKING_TOKEN}"}}', '{"token": "Zx9Q…"}'),
+        (f"{BOOKING_TOKEN}/events", "Zx9Q…/events"),  # the head of a relative path
+        ("tok AbCdEfGhIjKlMn12 end", "tok AbCd… end"),  # 16 characters
+        ("tok AbCdEfGhIjKlM12 end", "tok AbCdEfGhIjKlM12 end"),  # 15 characters
+        ("tok AbCdEfGhIjKlMnOpQrStUvWxYz12345 end", "tok AbCd… end"),  # 31 characters
+        ("tok A1-_bcdefghijklmnop end", "tok A1-_… end"),  # url-safe `-` and `_`
+        (f"Bearer A{CLABE}", "Bearer [digits]"),  # 10 or more digits: none of them kept
+        ("Authorization: Basic dXNlcjpwYXNzd29yZA==", "Authorization: Basic dXNl…"),
+    ],
+)
+def test_a_standalone_token_of_16_to_31_characters_is_truncated(text: str, expected: str) -> None:
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "RequestContextMiddleware",
+        "SecurityHeadersMiddleware raised",
+        "in pialy.http.security_headers",
+        "Content-Security-Policy",
+        "x-content-type-options nosniff",
+        "starlette._exception_handler",
+        "abcdefghijklmn123456",  # lowercase with digits: a name, not a token
+    ],
+)
+def test_words_identifiers_and_lowercase_names_are_not_taken_for_tokens(text: str) -> None:
+    assert redact(text) == text
+
+
+def test_a_token_in_a_message_or_exception_text_is_truncated(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configure_logging("INFO")
+    try:
+        raise ValueError(f"no booking for {BOOKING_TOKEN}")
+    except ValueError:
+        logging.getLogger("x").exception("verify %s failed", BOOKING_TOKEN)
+    [line] = lines(capsys)
+    assert line["message"] == "verify Zx9Q… failed"
+    assert "ValueError: no booking for Zx9Q…" in str(line["exc"])
+    assert BOOKING_TOKEN not in json.dumps(line)
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
         # 32 characters or more that cannot be told apart from a key: redacted whole.
         (f"https://pialy.example/c/{BOOKING_TOKEN}", "https://pialy.[token]"),  # not absolute
         (f"/anywhere/{BOOKING_TOKEN}", "[token]"),  # a single name
@@ -839,6 +890,10 @@ ADVERSARIAL_INPUTS = {
     "path_tokens": "/c/a" * 25_000,
     "uuid_shapes": (UUID[:-1] + "-") * 2_700,
     "just_under_token": ("a" * 31 + " ") * 3_125,
+    "short_tokens": (BOOKING_TOKEN + " ") * 4_350,
+    "bearer_tokens": f"Authorization: Bearer {BOOKING_TOKEN}, " * 2_200,
+    "token_query": f"?token={BOOKING_TOKEN}&" * 3_300,
+    "mixed_31": ("Ab1" * 10 + "C ") * 3_125,
     "clabe_segments": f"/api/accounts/{CLABE}" * 3_100,
     "file_names": "/app/src/pialy/http/security_headers.py " * 2_500,
 }
