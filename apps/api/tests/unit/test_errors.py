@@ -167,6 +167,30 @@ def test_scrub_event_keeps_span_identifiers_of_a_transaction() -> None:
     }
 
 
+def test_scrub_event_keeps_file_and_module_names_of_frames() -> None:
+    frames: list[dict[str, object]] = [
+        {
+            "filename": "starlette/_exception_handler.py",
+            "abs_path": "/app/.venv/lib/python3.13/site-packages/starlette/_exception_handler.py",
+            "module": "starlette._exception_handler",
+            "function": "wrapped_app",
+            "lineno": 42,
+        },
+        {
+            "filename": "pialy/http/security_headers.py",
+            "abs_path": "/app/src/pialy/http/security_headers.py",
+            "module": "pialy.http.security_headers",
+            "function": "send_with_headers",
+            "lineno": 32,
+        },
+    ]
+    event: dict[str, object] = {
+        "exception": {"values": [{"type": "RuntimeError", "stacktrace": {"frames": frames}}]}
+    }
+    scrubbed = scrub_event(event, {})
+    assert dig(scrubbed, "exception", "values", 0, "stacktrace", "frames") == frames
+
+
 def settings(monkeypatch: pytest.MonkeyPatch, **env: str) -> Settings:
     monkeypatch.setenv("ENV", "test")
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost/db")

@@ -53,6 +53,9 @@ MIN_PATH_NAMES = 2
 _RUN = re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{16,}(?:={1,2}(?![A-Za-z0-9+/=_-]))?")
 _WORD = re.compile(r"[A-Z]?[a-z0-9_-]*")
 _NAME = re.compile(r"[a-z][a-z_-]+")
+# File and module names (`security_headers`, `_exception_handler`). A `.` ends a run, so the
+# segment of `security_headers.py` is `security_headers`.
+_LOWERCASE_NAME = re.compile(r"[a-z0-9_-]+")
 # Digits fail closed (OWASP Logging Cheat Sheet: no personal data in logs). Any chain of 10 or more
 # digits is redacted whole: digit groups joined by 1 to 3 separator characters (whitespace or
 # `. , / _ - : | ( )`, plus the `T` of an ISO timestamp), after an optional `+` and `(`. A phone or
@@ -100,9 +103,10 @@ def _redact_segment(segment: str, after_slash: bool) -> str:
     """One `/` segment of a run: kept, replaced, or truncated to its first 4 characters.
 
     After a `/`, a segment of 16 or more characters is a bearer token (a booking token is 22),
-    wherever the route puts it, and keeps 4 characters; one with 10 or more digits becomes
-    `[digits]` instead (a CLABE as a route parameter: its first 4 digits name the bank). At the
-    start of a run, 32 or more is a key; anything shorter there is left to the digit rule.
+    wherever the route puts it, and keeps 4 characters. Before truncating: 10 or more digits
+    become `[digits]` (a CLABE as a route parameter: its first 4 digits name the bank), and a
+    lowercase name is kept. At the start of a run, 32 or more is a key; anything shorter there is
+    left to the digit rule.
     """
     if len(segment) < MIN_PATH_TOKEN_CHARS:
         return segment
@@ -110,6 +114,8 @@ def _redact_segment(segment: str, after_slash: bool) -> str:
         return "[token]" if len(segment) >= MIN_TOKEN_CHARS else segment
     if sum(char.isdecimal() for char in segment) >= MIN_DIGITS:
         return "[digits]"
+    if _LOWERCASE_NAME.fullmatch(segment):
+        return segment
     return f"{segment[:LOGGED_TOKEN_CHARS]}…"
 
 

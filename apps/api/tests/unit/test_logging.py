@@ -120,8 +120,8 @@ def test_truncates_booking_token_in_url_to_4_chars() -> None:
             "http://testserver/api/b/panaderia/bookings/Zx9Q…#top",
         ),
         (f"/api/anywhere/{BOOKING_TOKEN}.", "/api/anywhere/Zx9Q…."),
-        ("/x/abcdefghijklmnop", "/x/abcd…"),  # 16 characters
-        ("/x/abcdefghijklmno", "/x/abcdefghijklmno"),  # 15 characters
+        ("/x/abcdefghijklmnoP", "/x/abcd…"),  # 16 characters
+        ("/x/abcdefghijklmnO", "/x/abcdefghijklmnO"),  # 15 characters
         (f"/api/bookings/{UUID}/events", f"/api/bookings/{UUID}/events"),  # canonical UUID
         (f"/api/bookings/{UUID}x", "/api/bookings/[digits]"),  # not a canonical UUID
         ("/api/b/panaderia/slots?date=2026-11-15", "/api/b/panaderia/slots?date=2026-11-15"),
@@ -148,6 +148,36 @@ def test_a_path_segment_with_10_or_more_digits_is_redacted_as_digits(
 ) -> None:
     # Truncated to 4 characters, a CLABE would still show its bank and plaza digits.
     assert redact(f"GET {path}") == f"GET {expected}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'File "/app/src/pialy/http/security_headers.py", line 32, in send_with_headers',
+        'File "/app/.venv/lib/python3.13/site-packages/starlette/_exception_handler.py", line 42',
+        "starlette/_exception_handler.py",
+        "/x/abcdefghijklmnop",  # 16 characters, lowercase
+        "/app/src/pialy/a_module_name_of_more_than_thirty_two_chars.py",
+    ],
+)
+def test_lowercase_file_and_module_names_in_paths_stay_readable(text: str) -> None:
+    assert redact(text) == text
+
+
+def test_file_names_stay_readable_in_a_logged_traceback(context: None) -> None:
+    traceback_text = "\n".join(
+        [
+            "Traceback (most recent call last):",
+            '  File "/app/.venv/lib/python3.13/site-packages/starlette/_exception_handler.py",'
+            " line 42, in wrapped_app",
+            '  File "/app/src/pialy/http/security_headers.py", line 32, in send_with_headers',
+            f"RuntimeError: call {PHONE}",
+        ]
+    )
+    record = logging.LogRecord("x", logging.ERROR, __file__, 1, "failed", None, None)
+    record.exc_text = traceback_text
+    line = json.loads(JsonFormatter().format(record))
+    assert line["exc"] == traceback_text.replace(PHONE, "[digits]")
 
 
 @pytest.mark.parametrize(
@@ -810,6 +840,7 @@ ADVERSARIAL_INPUTS = {
     "uuid_shapes": (UUID[:-1] + "-") * 2_700,
     "just_under_token": ("a" * 31 + " ") * 3_125,
     "clabe_segments": f"/api/accounts/{CLABE}" * 3_100,
+    "file_names": "/app/src/pialy/http/security_headers.py " * 2_500,
 }
 
 
