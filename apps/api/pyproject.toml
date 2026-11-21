@@ -48,6 +48,8 @@ select = ["E", "F", "I", "UP", "B", "SIM", "S"]
 strict = true
 python_version = "3.13"
 mypy_path = "src"
+# Name test modules by path (tests.conftest, tests.db.conftest) so equal file names do not clash.
+explicit_package_bases = true
 plugins = ["pydantic.mypy"]
 
 # Supply-chain cooldown: uv ignores releases younger than 7 days, so a hijacked release is not

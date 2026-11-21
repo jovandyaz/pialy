@@ -1,0 +1,126 @@
+import time
+from uuid import UUID, uuid4
+
+import psycopg
+import pytest
+from psycopg import errors
+
+from pialy.db.database import Database
+from pialy.db.locks import advisory_key
+from pialy.tenancy.context import OwnerActor, TenantContext
+
+# A transaction-local setting reads as '' (not NULL) on that connection once it has ended,
+# hence nullif, as the policies of Task 5 do.
+BUSINESS_SETTING = "SELECT nullif(current_setting('app.business_id', true), '')"
+USER_SETTING = "SELECT nullif(current_setting('app.user_id', true), '')"
+TIME_LIMITS = (
+    "SELECT current_setting('statement_timeout'), current_setting('lock_timeout'),"
+    " current_setting('idle_in_transaction_session_timeout')"
+)
+
+
+def owner_context(business_id: UUID) -> TenantContext:
+    return TenantContext(business_id=business_id, actor=OwnerActor(user_id=uuid4()))
+
+
+def unset_on_every_connection_until(db: Database, query: str, backend_pid: int) -> list[int]:
+    """Run `query` in system() until the pool hands back `backend_pid`; assert it is unset."""
+    seen: list[int] = []
+    for _ in range(db.max_size):  # the pool serves its idle connections in order
+        with db.system() as connection:
+            assert connection.execute(query).fetchone() == (None,)
+            seen.append(connection.info.backend_pid)
+        if seen[-1] == backend_pid:
+            break
+    return seen
+
+
+def test_tenant_transaction_sets_business_setting_locally(db: Database) -> None:
+    business_id = uuid4()
+    with db.tenant(owner_context(business_id)) as connection:
+        assert connection.execute(BUSINESS_SETTING).fetchone() == (str(business_id),)
+        backend_pid = connection.info.backend_pid
+    assert backend_pid in unset_on_every_connection_until(db, BUSINESS_SETTING, backend_pid)
+
+
+def test_user_transaction_sets_user_setting_locally(db: Database) -> None:
+    user_id = uuid4()
+    with db.user(user_id) as connection:
+        assert connection.execute(USER_SETTING).fetchone() == (str(user_id),)
+        assert connection.execute(BUSINESS_SETTING).fetchone() == (None,)
+        backend_pid = connection.info.backend_pid
+    assert backend_pid in unset_on_every_connection_until(db, USER_SETTING, backend_pid)
+
+
+def test_tenant_transaction_cannot_be_committed_midway(db: Database) -> None:
+    # Every statement in the block runs in the one transaction that carries the business.
+    business_id = uuid4()
+    with db.tenant(owner_context(business_id)) as connection:
+        with pytest.raises(psycopg.ProgrammingError):
+            connection.commit()
+        assert connection.execute(BUSINESS_SETTING).fetchone() == (str(business_id),)
+
+
+def test_tenant_transaction_rolls_back_on_error(db: Database) -> None:
+    # A session-level setting survives a commit but not a rollback.
+    probe = "SELECT nullif(current_setting('app.probe', true), '')"
+    with pytest.raises(RuntimeError), db.tenant(owner_context(uuid4())) as connection:
+        connection.execute("SELECT set_config('app.probe', 'kept', false)")
+        backend_pid = connection.info.backend_pid
+        raise RuntimeError("boom")
+    assert backend_pid in unset_on_every_connection_until(db, probe, backend_pid)
+
+
+def test_statement_timeout_applies(db: Database) -> None:
+    with pytest.raises(errors.QueryCanceled), db.system() as connection:
+        connection.execute("SELECT pg_sleep(6)")
+
+
+def test_every_connection_carries_the_time_limits(db: Database) -> None:
+    with db.system() as connection:
+        assert connection.execute(TIME_LIMITS).fetchone() == ("5s", "2s", "15s")
+    with db.lock_connection() as connection:
+        assert connection.execute(TIME_LIMITS).fetchone() == ("5s", "2s", "15s")
+
+
+def test_app_role_cannot_bypass_rls(db: Database) -> None:
+    with db.system() as connection:
+        row = connection.execute(
+            "SELECT rolname, rolbypassrls, rolsuper FROM pg_roles WHERE rolname = current_user"
+        ).fetchone()
+    assert row == ("pialy_app", False, False)
+
+
+def test_app_role_owns_nothing_and_cannot_create_tables(db: Database) -> None:
+    with db.system() as connection:
+        owned = connection.execute(
+            "SELECT count(*) FROM pg_class WHERE relowner = 'pialy_app'::regrole"
+        ).fetchone()
+        assert owned == (0,)
+        with pytest.raises(errors.InsufficientPrivilege):
+            connection.execute("CREATE TABLE public.intruder (n int)")
+
+
+def test_lock_connection_holds_session_locks_outside_transactions(db: Database) -> None:
+    key = advisory_key("sweeper", f"test-{uuid4()}")
+    with db.lock_connection() as connection:
+        assert connection.autocommit
+        assert connection.execute("SELECT pg_try_advisory_lock(%s)", (key,)).fetchone() == (True,)
+        with db.system() as other:
+            taken = other.execute("SELECT pg_try_advisory_xact_lock(%s)", (key,)).fetchone()
+            assert taken == (False,)
+        connection.execute("SELECT pg_advisory_unlock(%s)", (key,))
+
+
+def test_lock_connection_returns_to_the_pool_without_its_locks(db: Database) -> None:
+    key = advisory_key("relay", f"test-{uuid4()}")
+    with db.lock_connection() as connection:
+        connection.execute("SELECT pg_advisory_lock(%s)", (key,))  # never unlocked
+    deadline = time.monotonic() + 2
+    while True:
+        with db.system() as other:
+            free = other.execute("SELECT pg_try_advisory_xact_lock(%s)", (key,)).fetchone()
+        if free == (True,) or time.monotonic() > deadline:
+            break
+        time.sleep(0.05)
+    assert free == (True,)

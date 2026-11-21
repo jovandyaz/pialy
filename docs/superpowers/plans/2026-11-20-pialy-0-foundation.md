@@ -129,9 +129,9 @@ docker-compose.yml             postgres:16 + fake pey for local
   - `locks.py`: `advisory_key(namespace: str, ident: str) -> int` (stable signed 64-bit from SHA-256); namespaces `"sweeper"`, `"relay"`, `"mandate"`, `"retention"`.
 - Test fixture: `db` creates a throwaway database per test session from `TEST_DATABASE_URL` (owner role), runs `alembic upgrade head` as owner, yields a `Database` connected as `pialy_app`; truncates tenant tables between tests.
 
-- [ ] **Step 1: Failing tests:** `test_tenant_transaction_sets_business_setting_locally` (inside → setting equals id; a following `system()` sees it unset); `test_statement_timeout_applies` (`SELECT pg_sleep(6)` raises `QueryCanceled`); `test_app_role_cannot_bypass_rls` (`SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = current_user` → both false); `test_advisory_key_is_stable`.
-- [ ] **Step 2–4:** fail, implement, pass (needs Task 4's migrations; land 3 and 4 in one PR).
-- [ ] **Step 5:** Commit `feat(api): add tenant-scoped database access`.
+- [x] **Step 1: Failing tests:** `test_tenant_transaction_sets_business_setting_locally` (inside → setting equals id; a following `system()` sees it unset); `test_statement_timeout_applies` (`SELECT pg_sleep(6)` raises `QueryCanceled`); `test_app_role_cannot_bypass_rls` (`SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = current_user` → both false); `test_advisory_key_is_stable`.
+- [x] **Step 2–4:** fail, implement, pass (needs Task 4's migrations; land 3 and 4 in one PR).
+- [x] **Step 5:** Commit `feat(api): add tenant-scoped database access`.
 
 ### Task 4: Schema migration 0001 — tables and invariants (B) **[money]**
 

@@ -72,6 +72,9 @@ class Settings(BaseSettings):
     log_level: Annotated[
         Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"], BeforeValidator(_upper)
     ] = "INFO"  # any case: `info` is read as `INFO`
+    # Where Alembic revisions live, relative to the working directory, which is apps/api
+    # for both the app and `alembic upgrade head` (alembic.ini's script_location).
+    migrations_dir: Path = Path("migrations")
 
     @model_validator(mode="before")
     @classmethod

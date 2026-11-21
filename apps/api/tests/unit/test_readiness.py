@@ -1,6 +1,13 @@
 from pathlib import Path
 
+import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+
+from pialy.config import Settings
 from pialy.observability.readiness import is_current, migrations_head
+
+API_DIR = Path(__file__).resolve().parents[2]
 
 
 def write_revision(versions: Path, revision: str, down: str | None) -> None:
@@ -43,3 +50,21 @@ def test_current_only_when_database_matches_head() -> None:
     assert not is_current(None, "0002")
     assert not is_current("0002", None)
     assert not is_current(None, None)
+
+
+def test_readiness_and_the_alembic_cli_read_the_same_migrations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(API_DIR)  # where `alembic upgrade head` and the app both run
+    monkeypatch.setenv("ENV", "test")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost/db")
+    cli = ScriptDirectory.from_config(Config(API_DIR / "alembic.ini"))
+    assert Path(cli.dir).resolve() == Settings().migrations_dir.resolve()
+    assert (API_DIR / "migrations" / "versions").is_dir()
+
+
+def test_migrations_dir_is_a_setting(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("ENV", "test")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost/db")
+    monkeypatch.setenv("MIGRATIONS_DIR", str(tmp_path))
+    assert Settings().migrations_dir == tmp_path
