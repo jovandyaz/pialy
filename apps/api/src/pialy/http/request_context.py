@@ -64,28 +64,31 @@ class RequestContextMiddleware:
 
     async def _handle(self, scope: Scope, receive: Receive, send: Send, rid: str) -> None:
         started = False
-        aborted = False
+        finished = False
         status = 500  # what the client gets when nothing was sent
 
         async def send_with_id(message: Message) -> None:
-            nonlocal started, status
+            nonlocal started, finished, status
             if message["type"] == "http.response.start":
                 started = True
                 status = message["status"]
                 MutableHeaders(scope=message)[REQUEST_ID_HEADER] = rid
             await send(message)
+            # ASGI: a body with `more_body` False (its default) completes the response.
+            if message["type"] == "http.response.body" and not message.get("more_body", False):
+                finished = True
 
         try:
             await self.app(scope, receive, send_with_id)
         except Exception:
             logger.exception("unhandled error")
             if started:
-                aborted = True  # the status line already went out; the body did not finish
-                raise
+                raise  # the status line already went out: nothing else can be sent
             await problem_response(500)(scope, receive, send_with_id)
         finally:
+            # Started but not finished: an error, a cancellation or a client that left mid-stream.
             # The status is a field: in the text it would merge with a path ending in digits.
             fields: dict[str, int | bool] = {"status": status}
-            if aborted:
+            if started and not finished:
                 fields["aborted"] = True
             logger.info("%s %s", scope["method"], route_of(scope), extra=log_fields(**fields))

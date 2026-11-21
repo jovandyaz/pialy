@@ -7,7 +7,7 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest
-from fastapi import FastAPI, Request
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.responses import StreamingResponse
 from starlette.types import Message, Scope
 
@@ -25,6 +25,37 @@ def make_app(monkeypatch: pytest.MonkeyPatch) -> FastAPI:
     monkeypatch.setenv("ENV", "test")
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:1/none")
     return create_app(Settings(), system_clock, lambda: True)
+
+
+def http_scope(path: str) -> Scope:
+    return {
+        "type": "http",
+        "asgi": {"version": "3.0"},  # spec 2.0-2.3, as uvicorn: Starlette watches for disconnects
+        "http_version": "1.1",
+        "method": "GET",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "headers": [],
+        "client": ("127.0.0.1", 50000),
+        "server": ("testserver", 80),
+    }
+
+
+async def connected() -> Message:
+    await asyncio.Event().wait()  # the client stays connected
+    raise AssertionError("unreachable")
+
+
+def add_endless_stream(app: FastAPI) -> None:
+    @app.get("/endless")
+    async def endless() -> StreamingResponse:
+        async def chunks() -> AsyncIterator[bytes]:
+            yield b"one\n"
+            await asyncio.Event().wait()  # never ends on its own
+
+        return StreamingResponse(chunks(), media_type="text/event-stream")
 
 
 def log_lines(capsys: pytest.CaptureFixture[str], logger: str) -> list[dict[str, object]]:
@@ -104,34 +135,124 @@ def test_an_error_after_the_response_started_is_logged_as_aborted(
 
         return StreamingResponse(chunks(), media_type="text/event-stream")
 
-    scope: Scope = {
-        "type": "http",
-        "asgi": {"version": "3.0"},
-        "http_version": "1.1",
-        "method": "GET",
-        "scheme": "http",
-        "path": "/broken-stream",
-        "raw_path": b"/broken-stream",
-        "query_string": b"",
-        "headers": [],
-        "client": ("127.0.0.1", 50000),
-        "server": ("testserver", 80),
-    }
     sent: list[Message] = []
-
-    async def receive() -> Message:
-        await asyncio.Event().wait()  # the client stays connected
-        raise AssertionError("unreachable")
 
     async def send(message: Message) -> None:
         sent.append(message)
 
     configure_logging("INFO")
     with pytest.raises(RuntimeError, match="the stream broke"):
-        asyncio.run(app(scope, receive, send))  # re-raised: the 200 already went out
+        asyncio.run(app(http_scope("/broken-stream"), connected, send))  # the 200 already went out
     assert sent[0]["status"] == 200
     error, access = log_lines(capsys, "pialy.http")  # one access line, not a second one
     assert error["level"] == "ERROR"
     assert access["message"] == "GET /broken-stream"
     assert access["status"] == 200  # always the status that went out, as an int
     assert access["aborted"] is True
+
+
+def test_a_cancelled_stream_is_logged_as_aborted(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], json_logs: None
+) -> None:
+    # A cancellation (server shutdown, a timeout around the app) is not an `Exception`.
+    app = make_app(monkeypatch)
+    add_endless_stream(app)
+
+    async def run() -> None:
+        first_chunk_sent = asyncio.Event()
+
+        async def send(message: Message) -> None:
+            if message["type"] == "http.response.body" and message["body"] == b"one\n":
+                first_chunk_sent.set()
+
+        task = asyncio.create_task(app(http_scope("/endless"), connected, send))
+        await asyncio.wait_for(first_chunk_sent.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    configure_logging("INFO")
+    asyncio.run(run())
+    [access] = log_lines(capsys, "pialy.http")  # no error line: nothing failed
+    assert access["message"] == "GET /endless"
+    assert access["status"] == 200
+    assert access["aborted"] is True
+
+
+def test_a_stream_the_client_left_is_logged_as_aborted(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], json_logs: None
+) -> None:
+    # Starlette stops the stream on `http.disconnect` and returns normally, without the last body.
+    app = make_app(monkeypatch)
+    add_endless_stream(app)
+
+    async def run() -> None:
+        client_left = asyncio.Event()
+
+        async def receive() -> Message:
+            await asyncio.wait_for(client_left.wait(), timeout=2)
+            return {"type": "http.disconnect"}
+
+        async def send(message: Message) -> None:
+            if message["type"] == "http.response.body" and message["body"] == b"one\n":
+                client_left.set()
+
+        await app(http_scope("/endless"), receive, send)
+
+    configure_logging("INFO")
+    asyncio.run(run())
+    [access] = log_lines(capsys, "pialy.http")
+    assert access["status"] == 200
+    assert access["aborted"] is True
+
+
+def test_a_stream_that_ends_is_not_aborted(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], json_logs: None
+) -> None:
+    app = make_app(monkeypatch)
+
+    @app.get("/short-stream")
+    async def short_stream() -> StreamingResponse:
+        async def chunks() -> AsyncIterator[bytes]:
+            yield b"one\n"
+            yield b"two\n"
+
+        return StreamingResponse(chunks(), media_type="text/event-stream")
+
+    async def send(message: Message) -> None:
+        return None
+
+    configure_logging("INFO")
+    asyncio.run(app(http_scope("/short-stream"), connected, send))
+    [access] = log_lines(capsys, "pialy.http")
+    assert access["status"] == 200
+    assert "aborted" not in access
+
+
+def test_an_error_after_the_response_finished_is_logged_but_not_as_aborted(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], json_logs: None
+) -> None:
+    app = make_app(monkeypatch)
+
+    def fail() -> None:
+        raise RuntimeError("the background task broke")
+
+    @app.get("/then-fail")
+    async def then_fail(tasks: BackgroundTasks) -> dict[str, str]:
+        tasks.add_task(fail)  # runs once the whole response went out
+        return {"ok": "yes"}
+
+    sent: list[Message] = []
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    configure_logging("INFO")
+    with pytest.raises(RuntimeError, match="the background task broke"):
+        asyncio.run(app(http_scope("/then-fail"), connected, send))
+    assert sent[-1]["type"] == "http.response.body"
+    assert "more_body" not in sent[-1]  # left out: ASGI's default, False, ends the response
+    error, access = log_lines(capsys, "pialy.http")
+    assert error["level"] == "ERROR"
+    assert access["status"] == 200
+    assert "aborted" not in access
