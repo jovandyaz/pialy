@@ -6,7 +6,6 @@ dist/
 .playwright-mcp/
 .impeccable/
 .superpowers/
-docs/superpowers/
 PRODUCT.md
 design/
 .claude/
