@@ -36,7 +36,8 @@ CURRENCY = r"~ '^[A-Z]{3}$'"
 
 # Shapes of the fields payment_events.raw keeps from pey's payment payload (docs.pey.mx, API
 # 2026-10-20), matched against their text (`#>>`). A value outside them fails the insert with
-# 23514 rather than being stored; relaxing a shape takes a new revision.
+# 23514 rather than being stored (the projection drops it first, see payment_events_raw_check);
+# relaxing a shape takes a new revision.
 # transactionId and codiQrId: ids pey assigns (today a ULID and the 10 hex digits of the CoDi
 # QR), taken as opaque strings so that pey changing their format never drops a payment. Digits
 # alone are refused: that is the shape of a phone or a CLABE.
@@ -277,12 +278,14 @@ STATEMENTS = (
         CONSTRAINT payment_events_clabe_check
             CHECK (raw #>> '{{metadata,clabe}}' ~ '^\**.{{0,4}}$'),
         -- raw is a projection of pey's payload, never the body as received: the fields a
-        -- PeyPaymentEvent reads, under pey's names (attemptId lifted out of externalMetadata),
-        -- each of its documented type and shape, so none can carry a phone or a CLABE. A field
-        -- pey sends as null (metadata may be) is left out. amount stays as pey sends it, pesos
-        -- with up to 2 decimals; amount_minor is the value pialy uses. CASE orders the tests,
-        -- as deleting keys from a non-object and casting a non-number raise instead of
-        -- returning false.
+        -- PeyPaymentEvent reads, under pey's names (attemptId lifted out of externalMetadata).
+        -- This CHECK is a backstop, not the filter: it refuses a field of another type or shape,
+        -- which could carry a phone or a CLABE, by failing the whole insert. So Task 11's
+        -- projection must fit every field to its shape or drop it, and the payment row always
+        -- lands. A field pey sends as null (metadata may be) is left out. amount stays as pey
+        -- sends it, pesos with up to 2 decimals; amount_minor is the value pialy uses. CASE
+        -- orders the tests, as deleting keys from a non-object and casting a non-number raise
+        -- instead of returning false.
         CONSTRAINT payment_events_raw_check CHECK (
             CASE
                 WHEN jsonb_typeof(raw) <> 'object'
