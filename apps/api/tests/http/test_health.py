@@ -301,6 +301,7 @@ def test_error_line_carries_request_id_route_and_bound_business(
         assert line["business_id"] == "biz-9"
     assert access["message"] == "GET /stores/{store}/boom"
     assert access["status"] == 500
+    assert "aborted" not in access  # the 500 problem went out whole
 
 
 def test_request_line_and_handler_line_carry_route_and_request_id(
@@ -316,6 +317,7 @@ def test_request_line_and_handler_line_carry_route_and_request_id(
         assert line["business_id"] == "biz-1"
     assert access["message"] == "GET /bookings/{token}"
     assert access["status"] == 200
+    assert "aborted" not in access
     assert "Zx9QbW1k" not in json.dumps([handler, access])
 
 

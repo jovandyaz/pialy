@@ -64,7 +64,8 @@ class RequestContextMiddleware:
 
     async def _handle(self, scope: Scope, receive: Receive, send: Send, rid: str) -> None:
         started = False
-        status: int | str = 500
+        aborted = False
+        status = 500  # what the client gets when nothing was sent
 
         async def send_with_id(message: Message) -> None:
             nonlocal started, status
@@ -79,9 +80,12 @@ class RequestContextMiddleware:
         except Exception:
             logger.exception("unhandled error")
             if started:
-                status = "aborted"  # the status line already went out; the body did not finish
+                aborted = True  # the status line already went out; the body did not finish
                 raise
             await problem_response(500)(scope, receive, send_with_id)
         finally:
             # The status is a field: in the text it would merge with a path ending in digits.
-            logger.info("%s %s", scope["method"], route_of(scope), extra=log_fields(status=status))
+            fields: dict[str, int | bool] = {"status": status}
+            if aborted:
+                fields["aborted"] = True
+            logger.info("%s %s", scope["method"], route_of(scope), extra=log_fields(**fields))

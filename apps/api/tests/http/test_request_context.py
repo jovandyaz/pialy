@@ -130,7 +130,8 @@ def test_an_error_after_the_response_started_is_logged_as_aborted(
     with pytest.raises(RuntimeError, match="the stream broke"):
         asyncio.run(app(scope, receive, send))  # re-raised: the 200 already went out
     assert sent[0]["status"] == 200
-    error, access = log_lines(capsys, "pialy.http")
+    error, access = log_lines(capsys, "pialy.http")  # one access line, not a second one
     assert error["level"] == "ERROR"
     assert access["message"] == "GET /broken-stream"
-    assert access["status"] == "aborted"
+    assert access["status"] == 200  # always the status that went out, as an int
+    assert access["aborted"] is True
