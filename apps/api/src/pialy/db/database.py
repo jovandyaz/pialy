@@ -2,8 +2,9 @@
 
 The service connects as `pialy_app`: not a superuser, not a table owner, no BYPASSRLS.
 Tenant rows are reached only inside `tenant(ctx)`, whose transaction starts by setting
-`app.business_id` with `set_config(..., true)`: the value lives for that transaction only, so a
-pooled connection never carries it into the next one, and row-level security reads it.
+`app.business_id` with `set_config(..., true)`: the value lives for that transaction only, and
+row-level security reads it. A connection goes back to its pool reset to its session defaults,
+so nothing set for the session (even by mistake) reaches the next checkout.
 """
 
 from collections.abc import Iterator
@@ -11,6 +12,7 @@ from contextlib import contextmanager
 from uuid import UUID
 
 from psycopg import Connection
+from psycopg.conninfo import conninfo_to_dict, make_conninfo
 from psycopg.rows import TupleRow
 from psycopg_pool import ConnectionPool
 
@@ -22,38 +24,49 @@ POOL_MAX_SIZE = 10
 LOCK_POOL_MIN_SIZE = 1
 LOCK_POOL_MAX_SIZE = 4
 CONNECT_TIMEOUT_SECONDS = 5
+# Session limits of every pooled connection.
+STATEMENT_TIMEOUT_SECONDS = 5
+LOCK_TIMEOUT_SECONDS = 2
+IDLE_IN_TRANSACTION_TIMEOUT_SECONDS = 15
 # Longest wait for a pooled connection before PoolTimeout (psycopg's default is 30 s), so a
 # request fails fast when the pool is exhausted or the database is down.
 POOL_TIMEOUT_SECONDS = 3.0
 # Waiting for a lock connection is bounded like waiting for the lock itself (lock_timeout).
-LOCK_POOL_TIMEOUT_SECONDS = 2.0
+LOCK_POOL_TIMEOUT_SECONDS = float(LOCK_TIMEOUT_SECONDS)
+# The limits as startup options (`-c name=value`, libpq's `options`), so they are the session's
+# defaults: what RESET ALL returns to, unlike a SET run after connecting.
+SESSION_LIMITS = (
+    f"-c statement_timeout={STATEMENT_TIMEOUT_SECONDS}s"
+    f" -c lock_timeout={LOCK_TIMEOUT_SECONDS}s"
+    f" -c idle_in_transaction_session_timeout={IDLE_IN_TRANSACTION_TIMEOUT_SECONDS}s"
+)
 
 type PgConnection = Connection[TupleRow]
 
 
-def _set_time_limits(connection: PgConnection) -> None:
-    """Session limits for every pooled connection, set once when the pool opens it."""
+def _with_session_limits(conninfo: str) -> str:
+    """`conninfo` with SESSION_LIMITS after its own startup options, which it keeps."""
+    own = conninfo_to_dict(conninfo).get("options")
+    return make_conninfo(conninfo, options=f"{own} {SESSION_LIMITS}" if own else SESSION_LIMITS)
+
+
+def _reset_session(connection: PgConnection) -> None:
+    """A connection goes back to its pool as it came: session defaults, no session lock."""
     with connection.transaction():
-        connection.execute("SET statement_timeout = '5s'")
-        connection.execute("SET lock_timeout = '2s'")
-        connection.execute("SET idle_in_transaction_session_timeout = '15s'")
-
-
-def _release_advisory_locks(connection: PgConnection) -> None:
-    """Safety net: a lock connection goes back to the pool holding no session lock."""
-    connection.execute("SELECT pg_advisory_unlock_all()")
+        connection.execute("RESET ALL")
+        connection.execute("SELECT pg_advisory_unlock_all()")
 
 
 class Database:
     def __init__(self, settings: Settings) -> None:
-        conninfo = settings.database_url.get_secret_value()
+        conninfo = _with_session_limits(settings.database_url.get_secret_value())
         self._pool: ConnectionPool[PgConnection] = ConnectionPool(
             conninfo,
             kwargs={"connect_timeout": CONNECT_TIMEOUT_SECONDS},
             min_size=POOL_MIN_SIZE,
             max_size=POOL_MAX_SIZE,
             open=False,
-            configure=_set_time_limits,
+            reset=_reset_session,
             timeout=POOL_TIMEOUT_SECONDS,
             name="pialy",
         )
@@ -65,8 +78,7 @@ class Database:
             min_size=LOCK_POOL_MIN_SIZE,
             max_size=LOCK_POOL_MAX_SIZE,
             open=False,
-            configure=_set_time_limits,
-            reset=_release_advisory_locks,
+            reset=_reset_session,
             timeout=LOCK_POOL_TIMEOUT_SECONDS,
             name="pialy-locks",
         )
