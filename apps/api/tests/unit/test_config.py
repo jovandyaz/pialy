@@ -103,8 +103,20 @@ def test_accepts_complete_production_env(monkeypatch: pytest.MonkeyPatch) -> Non
     assert load_settings().env == "production"
 
 
-@pytest.mark.parametrize("missing", ["SESSION_SECRET", "CREDENTIALS_ENC_KEY", "PHONE_HASH_SALT"])
-def test_requires_every_secret_in_production(monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "SESSION_SECRET",
+        "CREDENTIALS_ENC_KEY",
+        "PHONE_HASH_SALT",
+        "AUDIT_HMAC_KEY",
+        "PEY_BASE_URL",
+        "PUBLIC_ORIGIN",
+    ],
+)
+def test_requires_every_key_and_endpoint_in_production(
+    monkeypatch: pytest.MonkeyPatch, missing: str
+) -> None:
     set_env(monkeypatch, {k: v for k, v in PROD_ENV.items() if k != missing})
     with pytest.raises(SystemExit) as exc:
         load_settings()
@@ -123,8 +135,9 @@ def test_never_echoes_values_in_errors(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_rejects_session_secret_shorter_than_32(monkeypatch: pytest.MonkeyPatch) -> None:
     set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "SESSION_SECRET": "s" * 31})
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc:
         load_settings()
+    assert "SESSION_SECRET" in failure_text(exc)
     set_env(monkeypatch, {"SESSION_SECRET": "s" * 32})
     assert load_settings().session_secret.get_secret_value() == "s" * 32
 
@@ -178,7 +191,9 @@ def test_test_env_is_allowed_under_pytest(monkeypatch: pytest.MonkeyPatch) -> No
     assert load_settings().env == "test"
 
 
-def test_env_example_leaves_every_secret_unset() -> None:
+@pytest.mark.parametrize("env", ["development", "production"])
+def test_env_example_leaves_every_secret_unset(monkeypatch: pytest.MonkeyPatch, env: str) -> None:
+    monkeypatch.setenv("ENV", env)
     example = Path(__file__).resolve().parents[2] / ".env.example"
     with pytest.raises(ValidationError) as exc:
         Settings(_env_file=example)
