@@ -147,6 +147,37 @@ def test_accepts_versioned_credentials_key_list(monkeypatch: pytest.MonkeyPatch)
     assert load_settings().credentials_enc_key.get_secret_value() == value
 
 
+@pytest.mark.parametrize("value", ["0", "-1", "65536", "abc"])
+def test_rejects_port_outside_1_to_65535(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "PORT": value})
+    with pytest.raises(SystemExit) as exc:
+        load_settings()
+    assert "PORT" in failure_text(exc)
+
+
+@pytest.mark.parametrize("value", [1, 8080, 65535])
+def test_accepts_ports_inside_the_range(monkeypatch: pytest.MonkeyPatch, value: int) -> None:
+    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "PORT": str(value)})
+    assert load_settings().port == value
+
+
+def test_test_env_is_refused_outside_pytest(monkeypatch: pytest.MonkeyPatch) -> None:
+    # ENV=test generates random secrets: in a deployed process it would skip the secret requirement.
+    monkeypatch.delenv("PYTEST_VERSION", raising=False)
+    set_env(monkeypatch, {"ENV": "test", "DATABASE_URL": DATABASE_URL})
+    with pytest.raises(SystemExit) as exc:
+        load_settings()
+    assert "ENV" in failure_text(exc)
+    with pytest.raises(ValidationError):
+        Settings()
+
+
+def test_test_env_is_allowed_under_pytest(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYTEST_VERSION", "9.0.0")  # pytest defines it for the whole session
+    set_env(monkeypatch, {"ENV": "test", "DATABASE_URL": DATABASE_URL})
+    assert load_settings().env == "test"
+
+
 def test_env_example_leaves_every_secret_unset() -> None:
     example = Path(__file__).resolve().parents[2] / ".env.example"
     with pytest.raises(ValidationError) as exc:

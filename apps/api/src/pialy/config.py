@@ -2,11 +2,12 @@
 
 The four keys (phone_hash_salt, session_secret, credentials_enc_key,
 audit_hmac_key) are required in development and production. Only env == "test"
-gets random per-process values. Empty variables count as unset.
+gets random per-process values, and only under pytest. Empty variables count as unset.
 """
 
 import base64
 import binascii
+import os
 import secrets
 from pathlib import Path
 from typing import Literal, Self
@@ -42,7 +43,7 @@ class Settings(BaseSettings):
     )
 
     env: Literal["development", "test", "production"] = "development"
-    port: int = 3000
+    port: int = Field(default=3000, ge=1, le=65535)
     database_url: SecretStr
     migration_database_url: SecretStr | None = None
     pey_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:4010")
@@ -60,6 +61,10 @@ class Settings(BaseSettings):
     @classmethod
     def _random_keys_in_test(cls, data: dict[str, object]) -> dict[str, object]:
         if data.get("env") == "test":
+            # Random keys would silently skip the key requirement in a deployed process.
+            # pytest defines PYTEST_VERSION for the whole session, child processes included.
+            if "PYTEST_VERSION" not in os.environ:
+                raise ValueError("ENV=test is only allowed under pytest")
             data = {
                 "phone_hash_salt": _random_secret(),
                 "session_secret": _random_secret(),
