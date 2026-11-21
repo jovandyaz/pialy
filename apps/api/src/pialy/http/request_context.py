@@ -16,8 +16,7 @@ from pialy.http.problems import problem_response
 from pialy.observability.logging import (
     bind_route,
     redact,
-    request_id,
-    start_request_context,
+    request_context,
 )
 
 REQUEST_ID_HEADER = "X-Request-Id"
@@ -75,11 +74,13 @@ class RequestContextMiddleware:
             return
 
         rid = resolve_request_id(Headers(scope=scope).get(REQUEST_ID_HEADER))
-        request_id.set(rid)
-        start_request_context()
-        bind_route(lambda: route_of(scope))
+        with request_context(rid):
+            bind_route(lambda: route_of(scope))
+            await self._handle(scope, receive, send, rid)
+
+    async def _handle(self, scope: Scope, receive: Receive, send: Send, rid: str) -> None:
         started = False
-        status = 500
+        status: int | str = 500
 
         async def send_with_id(message: Message) -> None:
             nonlocal started, status
@@ -97,4 +98,4 @@ class RequestContextMiddleware:
                 raise
             await problem_response(500)(scope, receive, send_with_id)
         finally:
-            logger.info("%s %s %d", scope["method"], route_of(scope), status)
+            logger.info("%s %s %s", scope["method"], route_of(scope), status)

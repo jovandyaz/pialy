@@ -11,7 +11,7 @@ import json
 import logging
 import re
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import TextIO
@@ -159,10 +159,22 @@ def redact(text: str) -> str:
     return "".join(part if index % 2 else _redact_plain(part) for index, part in enumerate(parts))
 
 
-def start_request_context() -> None:
-    """Begin a request: fresh bound fields, shared by reference with every copied context."""
-    _bound.set({})
-    _route.set(None)
+@contextlib.contextmanager
+def request_context(rid: str) -> Iterator[None]:
+    """Run one request with its id and fresh bound fields, then restore what was there before.
+
+    The bound fields are one dict shared by reference with every context copied from this one.
+    The reset matters when the caller's task goes on after the request (an in-process client).
+    """
+    rid_token = request_id.set(rid)
+    bound_token = _bound.set({})
+    route_token = _route.set(None)
+    try:
+        yield
+    finally:
+        _route.reset(route_token)
+        _bound.reset(bound_token)
+        request_id.reset(rid_token)
 
 
 def bind(**fields: str) -> None:

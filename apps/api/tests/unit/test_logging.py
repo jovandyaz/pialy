@@ -18,8 +18,8 @@ from pialy.observability.logging import (
     log_event,
     redact,
     redact_value,
+    request_context,
     request_id,
-    start_request_context,
 )
 
 PHONE = "5512345678"
@@ -50,17 +50,15 @@ def _restore_root(json_logs: None) -> None:
 
 @pytest.fixture(autouse=True)
 def _fresh_bound_fields() -> Iterator[None]:
-    """`bind` outside a request writes to the test thread's context: clear it around each test."""
-    start_request_context()
-    yield
-    start_request_context()
+    """`bind` outside a request writes to the test thread's context: scope it to each test."""
+    with request_context(request_id.get()):
+        yield
 
 
 @pytest.fixture
 def context() -> Iterator[None]:
-    token = request_id.set("req-12345678")
-    yield
-    request_id.reset(token)
+    with request_context("req-12345678"):
+        yield
 
 
 def lines(capsys: pytest.CaptureFixture[str]) -> list[dict[str, object]]:
@@ -179,7 +177,6 @@ def test_bound_fields_cannot_override_the_base_keys(
     capsys: pytest.CaptureFixture[str], context: None
 ) -> None:
     configure_logging("INFO")
-    start_request_context()
     bind(
         ts="forged",
         level="DEBUG",
@@ -206,7 +203,6 @@ def test_bound_fields_and_the_route_are_redacted_too(
     capsys: pytest.CaptureFixture[str], context: None
 ) -> None:
     configure_logging("INFO")
-    start_request_context()
     bind(business_id=UUID, user=EMAIL, note=f"call {PHONE}")
     bind_route(lambda: f"/stores/{EMAIL}/boom")
     logging.getLogger("x").info("hello")
@@ -223,7 +219,6 @@ def test_a_bound_route_override_is_redacted_too(
     capsys: pytest.CaptureFixture[str], context: None
 ) -> None:
     configure_logging("INFO")
-    start_request_context()
     bind(route=f"/api/slots?phone={PHONE}")
     logging.getLogger("x").info("hello")
     [line] = lines(capsys)
@@ -903,7 +898,6 @@ def test_a_record_whose_exception_cannot_be_formatted_is_replaced_not_raised(
 
 def test_business_id_is_empty_until_bound(capsys: pytest.CaptureFixture[str]) -> None:
     configure_logging("INFO")
-    start_request_context()
     logging.getLogger("x").info("before")
     bind(business_id="biz-1")
     logging.getLogger("x").info("after")
