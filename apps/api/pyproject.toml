@@ -9,6 +9,7 @@ dependencies = [
   "psycopg[binary]",
   "psycopg_pool",
   "alembic",
+  "sqlalchemy>=2.1.8,<3",  # migrations/env.py builds Alembic's engine with it
   "pydantic>=2",
   "pydantic-settings",
   "httpx",

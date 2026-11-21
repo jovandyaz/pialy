@@ -1121,6 +1121,7 @@ dependencies = [
     { name = "psycopg-pool" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "sqlalchemy" },
     { name = "uvicorn" },
 ]
 
@@ -1152,6 +1153,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2" },
     { name = "pydantic-settings" },
     { name = "sentry-sdk", marker = "extra == 'sentry'", specifier = ">=2,<3" },
+    { name = "sqlalchemy", specifier = ">=2.1.8,<3" },
     { name = "uvicorn" },
 ]
 provides-extras = ["sentry"]
