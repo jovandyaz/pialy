@@ -36,14 +36,19 @@ _TOKEN = re.compile(r"[A-Za-z0-9_-]{32,}")
 _DIGITS = re.compile(r"\d{10,}")
 # A 10-digit phone with an optional +52/52 prefix (and the legacy mobile `1` after it), grouped
 # 2-4-4 or 3-3-4 (area code optionally in parentheses) and separated by single spaces, dots or
-# dashes. Only these shapes, so a date, an
-# ISO timestamp, an IP address or a small number is never taken for a phone.
+# dashes. Only these shapes, so a date, an ISO timestamp, an IP address or a small number is
+# never taken for a phone.
 _SEP = r"[ .-]?"
 _PHONE = re.compile(
     rf"(?<!\d)(?:\+?52{_SEP}(?:1{_SEP})?)?"
     rf"(?:(?:\(\d{{2}}\)|\d{{2}}){_SEP}\d{{4}}{_SEP}\d{{4}}"
     rf"|(?:\(\d{{3}}\)|\d{{3}}){_SEP}\d{{3}}{_SEP}\d{{4}})(?!\d)"
 )
+# A maximal run of digit groups joined by single spaces, dots or dashes: a CLABE or a card number
+# written in groups. Linear: the groups and the separators never overlap, so nothing backtracks.
+_DIGIT_CHAIN = re.compile(r"(?<!\d)\d+(?:[ .-]\d+)*")
+_DATES_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}(?:[ .-]\d{4}-\d{2}-\d{2})+")
+ACCOUNT_DIGITS = range(15, 20)  # a card has 15 to 19 digits, a CLABE 18
 _HEX = "[0-9a-fA-F]"
 # A canonical UUID is an identifier, not a secret: it stays readable in logs.
 _UUID = re.compile(
@@ -56,14 +61,23 @@ def _shorten_token(match: re.Match[str]) -> str:
     return f"{match[1]}{match[2][:LOGGED_TOKEN_CHARS]}…"
 
 
+def _redact_digit_chain(match: re.Match[str]) -> str:
+    chain = match[0]
+    digits = sum(1 for char in chain if char not in " .-")
+    if digits in ACCOUNT_DIGITS and not _DATES_ONLY.fullmatch(chain):
+        return "[digits]"
+    return chain
+
+
 def _redact_plain(text: str) -> str:
     text = _TOKEN.sub("[token]", text)
+    text = _DIGIT_CHAIN.sub(_redact_digit_chain, text)
     text = _PHONE.sub("[digits]", text)
     return _DIGITS.sub("[digits]", text)
 
 
 def redact(text: str) -> str:
-    """Hide booking tokens, emails, 32+ character tokens, phones and runs of 10+ digits.
+    """Hide booking tokens, emails, 32+ character tokens, phones, grouped accounts and 10+ digits.
 
     Canonical UUIDs pass through untouched. Emails are redacted first, on the whole text, so a
     UUID inside an address (`user+<uuid>@x.mx`) cannot split it and leave a half behind.

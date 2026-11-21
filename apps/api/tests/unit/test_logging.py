@@ -240,6 +240,52 @@ def test_phone_redaction_leaves_ids_timestamps_and_small_numbers(text: str) -> N
     assert redact(text) == text
 
 
+@pytest.mark.parametrize(
+    "account",
+    [
+        "0121 8001 2345 6789 12",  # CLABE, 18 digits
+        "0121-8001-2345-6789-12",
+        "0121.8001.2345.6789.12",
+        "012 180 01234567891 2",  # bank, plaza, account, check digit
+        "1234 5678 9012 3456",  # card, 16 digits
+        "1234-5678-9012-3456",
+        "1234 567890 12345",  # 15 digits
+        "1234 5678 9012 3456 789",  # 19 digits
+    ],
+)
+def test_spaced_account_and_card_numbers_are_redacted_whole(account: str) -> None:
+    assert redact(f"pay {account} now") == "pay [digits] now"
+    assert redact(f"pay {account}.") == "pay [digits]."
+    assert redact(f"{account}, then") == "[digits], then"
+
+
+def test_spaced_account_next_to_a_phone_redacts_both() -> None:
+    assert (
+        redact("call 55 1234 5678 or pay 0121 8001 2345 6789 12") == "call [digits] or pay [digits]"
+    )
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "1234 5678 9012 34",  # 14 digits: shorter than any account or card
+        "at 2026-11-21T01:48:00Z",
+        "at 2026-11-21 01:48:00",
+        "at 2026-11-21T01:48:00.123456+00:00",
+        "date=2026-11-15",
+        "range 2026-11-15 2026-11-16",
+        "range 2026-11-15-2026-11-16",
+        "ip 192.168.100.200",
+        "version 1.2.3.4.5",
+        "build 20261121-0148",
+        "id 12345678-1234-1234-1234-123456789012",
+        f"booking {UUID} ok",
+    ],
+)
+def test_digit_group_rule_leaves_dates_ips_versions_and_uuids(text: str) -> None:
+    assert redact(text) == text
+
+
 def test_phone_next_to_a_uuid_is_redacted_and_the_uuid_kept() -> None:
     assert redact(f"{UUID} called 55 1234 5678") == f"{UUID} called [digits]"
 
