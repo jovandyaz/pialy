@@ -95,6 +95,7 @@ class RequestContextMiddleware:
         except Exception:
             logger.exception("unhandled error")
             if started:
+                status = "aborted"  # the status line already went out; the body did not finish
                 raise
             await problem_response(500)(scope, receive, send_with_id)
         finally:
