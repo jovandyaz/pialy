@@ -10,6 +10,8 @@ Python 3.13 backend (FastAPI, psycopg, Alembic), managed with uv. Root `AGENTS.m
 
 ## Conventions
 - `mypy --strict`, no `Any` in module interfaces; pydantic models frozen and strict at boundaries.
+  Deliberate exception: `Settings` is frozen but not strict, because environment values arrive as
+  strings and need coercion (`PORT` to an int, `PUBLIC_ORIGIN` to a URL, `LOG_LEVEL` to capitals).
 - Settings come from `pialy.config.load_settings()`; errors print variable names only, never values.
 - Time comes from the injected `Clock`, never `datetime.now()` in domain code.
 - `pialy.booking.domain` imports no framework or infrastructure (enforced by `.importlinter`).
