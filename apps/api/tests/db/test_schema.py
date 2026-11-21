@@ -14,6 +14,7 @@ from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
+from importlib.resources import files
 from pathlib import Path
 from typing import Protocol
 from uuid import UUID, uuid4
@@ -38,6 +39,8 @@ SALT = b"schema-tests-only-salt"
 CLABE = "123456789012345678"
 PHONE = "5512345678"
 MASKED_CLABE = "**************5678"
+# sha256 of agent-toolkit's audit schema.sql, which migration 0001 runs byte for byte.
+AUDIT_SCHEMA_SHA256 = "f79eab4b060b7f174bb184192d94c746b7c8ef9acbe1d76036d6bf049379ae52"
 
 # Tables whose rows belong to one business; Task 5 puts row-level security on each.
 TENANT_TABLES = frozenset(
@@ -1310,6 +1313,14 @@ def test_audit_events_is_the_toolkit_table(owner_db: Database) -> None:
             " ORDER BY ordinal_position"
         ).fetchall()
     assert [name for (name,) in rows] == list(AuditEvent.model_fields)
+
+
+def test_the_audit_schema_0001_runs_is_pinned() -> None:
+    # 0001 reads schema.sql from the installed toolkit when it runs, so a toolkit upgrade that
+    # edits it would give new databases a different audit table than migrated ones. On a change:
+    # review the diff, put it in a new migration, then update the pin.
+    schema = files("agent_toolkit.audit_log.adapters").joinpath("schema.sql").read_bytes()
+    assert sha256(schema).hexdigest() == AUDIT_SCHEMA_SHA256
 
 
 # --- the rules every tenant table follows (spec §5b, §12b) ---
