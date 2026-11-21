@@ -11,6 +11,8 @@ services:
       - '${PIALY_DB_PORT:-5432}:5432'
     volumes:
       - pialy-pgdata:/var/lib/postgresql/data
+      # The roles are created by the init script only on the first start, while the volume is
+      # empty. After changing the script or the role passwords, re-init with `docker compose down -v`.
       - ./infra/postgres/init-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres -d pialy']
