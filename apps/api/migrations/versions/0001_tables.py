@@ -14,8 +14,8 @@ Rules the tables follow (tests/db/test_schema.py checks each one):
   agrees with the status.
 - Personal data is stored as hashes and last digits only: the phone as an HMAC-SHA256 hex digest
   and its last 4 digits, session and invitation tokens as SHA-256 digests. Of pey's payment
-  payload only an allowlisted projection is kept, the payer's account masked to its last 4
-  characters.
+  payload only an allowlisted projection is kept, each field of its documented type and shape,
+  the payer's account masked to its last 4 characters.
 - Text columns are `text` with a CHECK, never `char(n)` (wiki.postgresql.org, "Don't Do This").
 - Constraints are NOT DEFERRABLE (the default), as `INSERT ... ON CONFLICT` arbiters must be.
 
@@ -32,9 +32,34 @@ branch_labels = None
 depends_on = None
 
 CURRENCY = r"~ '^[A-Z]{3}$'"
-# A member of a JSON object that is itself an object or an array. Strict mode, since lax mode
-# would unwrap an array and test its elements instead.
-NESTED = 'strict $.* ? (@.type() == "object" || @.type() == "array")'
+
+# Shapes of the fields payment_events.raw keeps from pey's payment payload (docs.pey.mx, API
+# 2026-10-20), matched against their text (`#>>`). A value outside them fails the insert with
+# 23514 rather than being stored; relaxing a shape takes a new revision.
+# transactionId: a ULID (github.com/ulid/spec: Crockford base32 without I, L, O and U,
+# case-insensitive, 26 characters, the first at most 7).
+ULID = r"(?i)^[0-7][0-9A-HJKMNP-TV-Z]{25}$"
+# codiQrId: the CoDi id of the QR. Banxico publishes no format; pey's examples are 10 hex digits.
+QR_ID = r"^[0-9A-Fa-f]{10}$"
+# datePaid: Unix seconds, an integer.
+UNIX_SECONDS = r"^[0-9]{1,10}$"
+# metadata.bankCode: the payer's bank, by its 3-digit code (as in a CLABE) or 5-digit SPEI one.
+BANK_CODE = r"^[0-9]{3,5}$"
+# metadata.trackingKey: the SPEI clave de rastreo, up to 30 alphanumeric characters
+# (banxico.org.mx/cep). A 10-digit key has the shape of a phone and is accepted all the same.
+TRACKING_KEY = r"^[0-9A-Za-z]{1,30}$"
+# metadata.attemptId: the id pialy gave the attempt, a UUID in canonical (lowercase) form.
+UUID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+
+
+def member(path: str, types: tuple[str, ...], shape: str | None = None) -> str:
+    """SQL that holds when raw has nothing at path, or a value of a JSON type in types whose
+    text matches shape. A JSON null is neither, so it fails."""
+    value = f"raw #> '{{{path}}}'"
+    kinds = ", ".join(f"'{kind}'" for kind in types)
+    matches = "true" if shape is None else f"raw #>> '{{{path}}}' ~ '{shape}'"
+    return f"CASE WHEN jsonb_typeof({value}) IN ({kinds}) THEN {matches} ELSE {value} IS NULL END"
+
 
 STATEMENTS = (
     # Trusted since PostgreSQL 13, so the database owner may create it without a superuser.
@@ -222,8 +247,11 @@ STATEMENTS = (
             CHECK (raw #>> '{{metadata,clabe}}' ~ '^\**.{{0,4}}$'),
         -- raw is a projection of pey's payload, never the body as received: the fields a
         -- PeyPaymentEvent reads, under pey's names (attemptId lifted out of externalMetadata),
-        -- each a scalar but metadata. CASE orders the tests, as deleting keys from a non-object
-        -- raises instead of returning false.
+        -- each of its documented type and shape, so none can carry a phone or a CLABE. A field
+        -- pey sends as null (metadata may be) is left out. amount stays as pey sends it, pesos
+        -- with up to 2 decimals; amount_minor is the value pialy uses. CASE orders the tests,
+        -- as deleting keys from a non-object and casting a non-number raise instead of
+        -- returning false.
         CONSTRAINT payment_events_raw_check CHECK (
             CASE
                 WHEN jsonb_typeof(raw) <> 'object'
@@ -232,8 +260,18 @@ STATEMENTS = (
                         = '{{}}'
                     AND (coalesce(raw -> 'metadata', '{{}}')
                         - ARRAY['clabe', 'bankCode', 'trackingKey', 'attemptId']) = '{{}}'
-                    AND NOT jsonb_path_exists(raw - 'metadata', '{NESTED}')
-                    AND NOT jsonb_path_exists(coalesce(raw -> 'metadata', '{{}}'), '{NESTED}')
+                    AND {member("transactionId", ("string",), ULID)}
+                    AND {member("codiQrId", ("string",), QR_ID)}
+                    AND CASE jsonb_typeof(raw -> 'amount')
+                        WHEN 'number' THEN (raw -> 'amount')::numeric > 0
+                            AND (raw -> 'amount')::numeric = trunc((raw -> 'amount')::numeric, 2)
+                        ELSE raw -> 'amount' IS NULL
+                    END
+                    AND {member("datePaid", ("number",), UNIX_SECONDS)}
+                    AND {member("metadata,clabe", ("string",))}
+                    AND {member("metadata,bankCode", ("string", "number"), BANK_CODE)}
+                    AND {member("metadata,trackingKey", ("string",), TRACKING_KEY)}
+                    AND {member("metadata,attemptId", ("string",), UUID)}
             END
         )
     )

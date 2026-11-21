@@ -93,34 +93,50 @@ ON CONFLICT (business_id, provider_event_id) WHERE kind = 'unmatched_payment' DO
 
 # The only form of a pey payment payload that payment_events.raw holds (built by Tasks 9 and 11):
 # pey's own names for the fields a PeyPaymentEvent reads, attemptId lifted out of
-# metadata.externalMetadata, and the payer's account masked to its last 4 characters.
+# metadata.externalMetadata, and the payer's account masked to its last 4 characters. A payload
+# whose metadata is null gives a projection without the key. Values are those of pey's documented
+# webhook examples (packages/connector-pey/test/fixtures), which are synthetic; attemptId is a
+# Pialy attempt id, a UUID.
+ATTEMPT_ID = "6f1c2a3b-0d4e-4f5a-8b6c-7d8e9f0a1b2c"
 SANITIZED_METADATA = {
     "clabe": MASKED_CLABE,
     "bankCode": 40012,
     "trackingKey": "0192191042",
-    "attemptId": "att-0001",
+    "attemptId": ATTEMPT_ID,
 }
 SANITIZED_PUSH = {
-    "transactionId": "01TESTTRANSACTION00000001",
+    "transactionId": "01M3QR5E7XHXMNZDEPFH3JAWS0",
     "amount": 0.01,
     "datePaid": 1790724758,
     "metadata": SANITIZED_METADATA,
 }
-SANITIZED_QR = SANITIZED_PUSH | {"codiQrId": "35a13c183a"}
+SANITIZED_QR = {
+    "transactionId": "01M3QR8H0RH0XBCKYYD242YXNV",
+    "codiQrId": "35a13c183a",
+    "amount": 150,
+    "datePaid": 1790724818,
+    "metadata": SANITIZED_METADATA,
+}
 # What pey sends that the projection leaves out (synthetic values).
 PEY_BODY = SANITIZED_QR | {
     "type": "codi.qr.payment_received",
-    "apiKeyId": "01TESTAPIKEY00000000000001",
-    "bankAccountId": "01TESTBANKACCOUNT000000001",
+    "apiKeyId": "01M3QMMR6X9CBVDY1SF3G8QWNW",
+    "bankAccountId": "01JBAVWE4NS5TGXHWGMX3KH23Q",
     "concept": "Reserva",
     "numRef": "1",
     "metadata": SANITIZED_METADATA
     | {
         "accountType": 40,
         "description": "Reserva",
-        "externalMetadata": {"attemptId": "att-0001", "orderId": "12345"},
+        "externalMetadata": {"attemptId": ATTEMPT_ID, "orderId": "12345"},
     },
 }
+
+
+def with_metadata(**fields: object) -> dict[str, object]:
+    """The sanitized QR projection with some metadata fields replaced."""
+    return SANITIZED_QR | {"metadata": SANITIZED_METADATA | fields}
+
 
 SCHEMA = """
 SELECT 'column ' || table_name || '.' || column_name || ' ' || data_type || ' '
@@ -857,7 +873,33 @@ def test_bookings_are_found_by_their_intent(owner_db: Database) -> None:
 # --- payment_events.raw: a sanitized projection, never pey's body as received ---
 
 
-@pytest.mark.parametrize("raw", [SANITIZED_PUSH, SANITIZED_QR, {}], ids=["push", "qr", "empty"])
+@pytest.mark.parametrize(
+    "raw",
+    [
+        SANITIZED_PUSH,
+        SANITIZED_QR,
+        {},
+        {key: value for key, value in SANITIZED_PUSH.items() if key != "metadata"},
+        SANITIZED_QR | {"codiQrId": "AB12CD34EF"},
+        with_metadata(bankCode="40012"),
+        SANITIZED_QR | {"amount": 1.5},
+        SANITIZED_QR | {"transactionId": "01m3qr8h0rh0xbckyyd242yxnv"},
+        with_metadata(bankCode="002"),
+        with_metadata(trackingKey="A" * 30),
+    ],
+    ids=[
+        "push",
+        "qr",
+        "empty",
+        "null-metadata-omitted",
+        "uppercase-qr-id",
+        "bank-code-string",
+        "pesos-with-centavos",
+        "lowercase-ulid",
+        "three-digit-bank-code",
+        "longest-tracking-key",
+    ],
+)
 def test_payment_events_store_the_sanitized_projection(
     owner_db: Database, raw: dict[str, object]
 ) -> None:
@@ -890,6 +932,59 @@ def test_payment_events_store_the_sanitized_projection(
 )
 def test_payment_events_reject_fields_outside_the_projection(
     owner_db: Database, raw: object
+) -> None:
+    business = create_business(owner_db)
+    with (
+        violates(errors.CheckViolation, "payment_events_raw_check"),
+        owner_db.tenant(context(business.id)) as conn,
+    ):
+        add_event(conn, business.id, raw=Jsonb(raw))
+
+
+# Each field of the projection keeps its documented type and shape, so an allowed key cannot
+# carry a phone, a CLABE or anything else.
+MALFORMED_FIELDS: list[tuple[str, dict[str, object]]] = [
+    ("clabe-in-bank-code", with_metadata(bankCode=CLABE)),
+    ("clabe-number-in-bank-code", with_metadata(bankCode=int(CLABE))),
+    ("phone-in-bank-code", with_metadata(bankCode="5512345678")),
+    ("bank-code-too-short", with_metadata(bankCode=40)),
+    ("bank-code-boolean", with_metadata(bankCode=True)),
+    ("transaction-id-not-ulid", SANITIZED_QR | {"transactionId": "tx-0001"}),
+    ("transaction-id-phone", SANITIZED_QR | {"transactionId": "5512345678"}),
+    ("transaction-id-ulid-letters", SANITIZED_QR | {"transactionId": "01M3QR8H0RH0XBCKYYD242YXNI"}),
+    (
+        "transaction-id-ulid-overflow",
+        SANITIZED_QR | {"transactionId": "81M3QR8H0RH0XBCKYYD242YXNV"},
+    ),
+    ("transaction-id-number", SANITIZED_QR | {"transactionId": 1790724818}),
+    ("qr-id-not-hex", SANITIZED_QR | {"codiQrId": "35a13c183z"}),
+    ("qr-id-phone", SANITIZED_QR | {"codiQrId": "5512345678x"}),
+    ("qr-id-number", SANITIZED_QR | {"codiQrId": 3513183}),
+    ("qr-id-too-short", SANITIZED_QR | {"codiQrId": "35a13c183"}),
+    ("qr-id-null", SANITIZED_QR | {"codiQrId": None}),
+    ("amount-string", SANITIZED_QR | {"amount": "150"}),
+    ("amount-zero", SANITIZED_QR | {"amount": 0}),
+    ("amount-negative", SANITIZED_QR | {"amount": -1}),
+    ("amount-below-a-centavo", SANITIZED_QR | {"amount": 0.001}),
+    ("date-paid-string", SANITIZED_QR | {"datePaid": "1790724818"}),
+    ("date-paid-fraction", SANITIZED_QR | {"datePaid": 1790724818.5}),
+    ("tracking-key-boolean", with_metadata(trackingKey=True)),
+    ("tracking-key-number", with_metadata(trackingKey=192191042)),
+    ("tracking-key-spaces", with_metadata(trackingKey="0192 191042")),
+    ("tracking-key-too-long", with_metadata(trackingKey="A" * 31)),
+    ("attempt-id-not-uuid", with_metadata(attemptId="att_01TESTATTEMPTQR000000001")),
+    ("attempt-id-number", with_metadata(attemptId=1)),
+    ("attempt-id-uppercase", with_metadata(attemptId=ATTEMPT_ID.upper())),
+    ("clabe-number", with_metadata(clabe=5678)),
+    ("metadata-null", SANITIZED_QR | {"metadata": None}),
+]
+
+
+@pytest.mark.parametrize(
+    "raw", [raw for _, raw in MALFORMED_FIELDS], ids=[name for name, _ in MALFORMED_FIELDS]
+)
+def test_payment_events_reject_projection_fields_of_another_type_or_shape(
+    owner_db: Database, raw: dict[str, object]
 ) -> None:
     business = create_business(owner_db)
     with (
