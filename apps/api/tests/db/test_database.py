@@ -1,11 +1,11 @@
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, ExitStack
 from uuid import UUID, uuid4
 
 import psycopg
 import pytest
-from psycopg import errors
+from psycopg import errors, sql
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import PoolTimeout
 
@@ -29,6 +29,8 @@ SESSION_STATE = (
     " current_setting('idle_in_transaction_session_timeout')"
 )
 CLEAN_SESSION = (None, "5s", "2s", "15s")
+# Who a checkout runs as: 'none' is the role setting when no SET ROLE is in effect.
+SESSION_ROLE = "SELECT current_user, current_setting('role')"
 # A returned connection is reset in the background before the pool serves it again.
 RETURN_DEADLINE_SECONDS = 5.0
 
@@ -138,6 +140,35 @@ def terminate(url: str, backend_pid: int) -> None:
                 return
             time.sleep(0.05)
     pytest.fail(f"backend {backend_pid} did not end", pytrace=False)
+
+
+@pytest.fixture
+def member_role(admin_url: str) -> Iterator[str]:
+    """A role made for the test that pialy_app is a member of, so it may SET ROLE to it."""
+    role = f"pialy_test_member_{uuid4().hex[:8]}"
+    with psycopg.connect(admin_url, autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE ROLE {}").format(sql.Identifier(role)))
+        admin.execute(sql.SQL("GRANT {} TO pialy_app").format(sql.Identifier(role)))
+    try:
+        yield role
+    finally:
+        with psycopg.connect(admin_url, autocommit=True) as admin:
+            admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
+
+
+@pytest.mark.parametrize("pool", ["main", "locks"])
+def test_a_session_role_does_not_outlive_its_checkout(
+    migrated_database: ThrowawayDatabase, member_role: str, pool: str
+) -> None:
+    # RESET ALL leaves role and session_authorization as they are (both NO_RESET_ALL).
+    with database_at_url(migrated_database.app_url) as database:
+        checkout: Checkout = database.system if pool == "main" else database.lock_connection
+        with checkout() as connection:
+            connection.execute(sql.SQL("SET ROLE {}").format(sql.Identifier(member_role)))
+            assert connection.execute(SESSION_ROLE).fetchone() == (member_role, member_role)
+            backend_pid = connection.info.backend_pid
+        rows = rows_until_served_again(checkout, SESSION_ROLE, backend_pid)
+    assert rows == {("pialy_app", "none")}
 
 
 @pytest.mark.parametrize("pool", ["main", "locks"])

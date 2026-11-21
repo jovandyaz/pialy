@@ -3,8 +3,8 @@
 The service connects as `pialy_app`: not a superuser, not a table owner, no BYPASSRLS.
 Tenant rows are reached only inside `tenant(ctx)`, whose transaction starts by setting
 `app.business_id` with `set_config(..., true)`: the value lives for that transaction only, and
-row-level security reads it. A connection goes back to its pool reset to its session defaults,
-so nothing set for the session (even by mistake) reaches the next checkout.
+row-level security reads it. A connection goes back to its pool reset to its login role and its
+session defaults, so nothing set for the session (even by mistake) reaches the next checkout.
 
 A role that row-level security does not bind (a superuser, BYPASSRLS) would see every business:
 startup refuses it, and the pools serve none of its connections.
@@ -81,8 +81,15 @@ def _with_session_limits(conninfo: str) -> str:
 
 
 def _reset_session(connection: PgConnection) -> None:
-    """A connection goes back to its pool as it came: session defaults, no session lock."""
+    """A connection goes back to its pool as it came: its login role, session defaults, no lock.
+
+    DISCARD ALL's sequence (postgresql.org/docs/current/sql-discard.html) without what pialy
+    does not use (cursors, prepared statements, LISTEN, temporary tables): RESET ALL leaves
+    `role` and `session_authorization` alone, so SET SESSION AUTHORIZATION DEFAULT comes first.
+    DISCARD ALL itself cannot run in the transaction the reset needs on the main pool.
+    """
     with connection.transaction():
+        connection.execute("SET SESSION AUTHORIZATION DEFAULT")
         connection.execute("RESET ALL")
         connection.execute("SELECT pg_advisory_unlock_all()")
 
