@@ -340,6 +340,7 @@ def add_flag(conn: PgConnection, business_id: UUID, **overrides: object) -> UUID
         "business_id": business_id,
         "id": flag_id,
         "kind": "unmatched_payment",
+        "provider_event_id": f"tx-{uuid4()}",
         "payload": Jsonb({}),
     }
     insert(conn, "flags", row | overrides)
@@ -856,6 +857,19 @@ def test_an_orphan_payment_raises_one_unmatched_flag(owner_db: Database) -> None
         owner_db.tenant(context(business.id)) as conn,
     ):
         add_flag(conn, business.id, kind="unmatched_payment", provider_event_id="tx1")
+
+
+def test_an_unmatched_flag_names_its_provider_event(owner_db: Database) -> None:
+    # Without one, NULLs never conflict and the orphan's refund flag would no longer dedupe.
+    business = create_business(owner_db)
+    with owner_db.tenant(context(business.id)) as conn:
+        for kind in ("refund_due", "amount_mismatch"):
+            add_flag(conn, business.id, kind=kind, provider_event_id=None)
+    with (
+        violates(errors.CheckViolation, "flags_unmatched_event_check"),
+        owner_db.tenant(context(business.id)) as conn,
+    ):
+        add_flag(conn, business.id, kind="unmatched_payment", provider_event_id=None)
 
 
 def test_bookings_are_found_by_their_intent(owner_db: Database) -> None:

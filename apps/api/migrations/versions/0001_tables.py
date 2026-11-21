@@ -388,7 +388,10 @@ STATEMENTS = (
         created_at        timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT flags_pkey PRIMARY KEY (business_id, id),
         CONSTRAINT flags_booking_fkey FOREIGN KEY (business_id, booking_id)
-            REFERENCES bookings (business_id, id)
+            REFERENCES bookings (business_id, id),
+        -- flags_one_unmatched_per_event_idx dedupes by the event, and NULLs never conflict.
+        CONSTRAINT flags_unmatched_event_check
+            CHECK (kind <> 'unmatched_payment' OR provider_event_id IS NOT NULL)
     )
     """,
     # An orphan payment has no intent to remember its event by, so its refund flag is
