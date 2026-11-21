@@ -1,0 +1,286 @@
+name: CI
+
+# Required checks: `ci-ok` and `gitleaks`.
+# No workflow-level `paths:`: a workflow skipped that way leaves its required checks pending.
+# The `changes` job decides which jobs a pull request needs. A job skipped by its `if:` reports
+# success, so `ci-ok` stands in for api, contract and web: it fails unless each one passed or was
+# skipped because `changes` found nothing for it.
+on:
+  pull_request:
+    # `edited` covers a change of base branch, which changes what the checks must cover.
+    types: [opened, synchronize, reopened, edited]
+  push:
+    branches: [main]
+  # Without it, required checks are never reported for a pull request in a merge queue.
+  merge_group:
+  # Weekly, so the audits and the secret scan also catch new advisories on unchanged code.
+  schedule:
+    - cron: '17 6 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  # Every uv command fails if its uv.lock is out of date instead of rewriting it.
+  UV_LOCKED: '1'
+
+jobs:
+  changes:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      web: ${{ steps.filter.outputs.web }}
+      contract: ${{ steps.filter.outputs.contract }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - id: filter
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # A pull request runs the jobs whose inputs it touches; any other event (a push to main,
+          # a merge queue group, the weekly schedule) runs every job.
+          if [ "$EVENT_NAME" = pull_request ]; then
+            # --no-renames lists a moved file under both paths, so moving it out still counts.
+            # core.quotePath=false prints non-ASCII names as they are; git still quotes names with a
+            # tab, newline, `"` or `\`, and those run every job below.
+            changed=$(git -c core.quotePath=false diff --no-renames --name-only "$BASE_SHA...HEAD")
+            # The pull request picks these names: print them with workflow commands turned off.
+            stop=$(openssl rand -hex 16)
+            echo "::stop-commands::$stop"
+            printf '%s\n' "$changed"
+            echo "::$stop::"
+          fi
+          # grep exits 0 on a match and 1 on none; anything else (a bad pattern) fails the step.
+          flag() {
+            if [ "$EVENT_NAME" != pull_request ]; then echo true; return; fi
+            local status=0
+            grep -Eq "$1" <<<"$changed" || status=$?
+            case $status in
+              0) echo true ;;
+              1) echo false ;;
+              *) echo "grep failed with exit $status on: $1" >&2; return "$status" ;;
+            esac
+          }
+
+          every_job='^(\.github/workflows/|package\.json$|")'
+          # The root .gitignore decides which files ruff (api) and eslint (web) see.
+          api='^(apps/api/|tests/contract/|infra/postgres/|\.nvmrc$|pnpm-workspace\.yaml$|\.gitignore$)'
+          # The TS server and its toolchain: the web job tests them and, until the suite targets
+          # the Python app, the contract suite runs against them.
+          ts_server='^(apps/server/|packages/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig\.base\.json$|\.nvmrc$)'
+          # Any JS or TS file, wherever it is, because `pnpm lint` runs `eslint .`.
+          web='^(apps/web/|\.gitignore$)|\.[cm]?[jt]sx?$'
+          # Assigned first: a failing $(flag …) inside the echo block below would not stop the step.
+          run_api=$(flag "$every_job|$api")
+          run_web=$(flag "$every_job|$ts_server|$web")
+          run_contract=$(flag "$every_job|$api|$ts_server|^docker-compose\.test\.yml$")
+          {
+            echo "api=$run_api"
+            echo "web=$run_web"
+            echo "contract=$run_contract"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  api:
+    needs: changes
+    # Runs unless `changes` said false, so a failed `changes` cannot turn this check green.
+    if: ${{ !cancelled() && needs.changes.outputs.api != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      # This job runs only uv through pnpm, so pnpm must not install the JS dependencies first.
+      pnpm_config_verify_deps_before_run: 'false'
+    services:
+      # Same database as docker-compose.yml; the admin password is a throwaway for this runner.
+      # docker-compose.yml is not digest-pinned yet, so this digest is bumped by hand.
+      # The health check uses TCP: during init the image runs a temporary server on the socket only.
+      postgres:
+        image: postgres:16@sha256:3950ad7c3148ca2175ef1b6c36c9efbf78957ae8fbe8b3a5d7c35af50500382f
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pialy
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d pialy"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: 0.13.6
+          cache-dependency-glob: apps/api/uv.lock
+      - name: Create the pialy_owner and pialy_app roles
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          # The init script docker-compose.yml mounts, with passwords generated for this run only.
+          PIALY_OWNER_PASSWORD=$(openssl rand -hex 24)
+          PIALY_APP_PASSWORD=$(openssl rand -hex 24)
+          echo "::add-mask::$PIALY_OWNER_PASSWORD"
+          echo "::add-mask::$PIALY_APP_PASSWORD"
+          export PIALY_OWNER_PASSWORD PIALY_APP_PASSWORD
+          docker exec -i -e PIALY_OWNER_PASSWORD -e PIALY_APP_PASSWORD "$POSTGRES_CONTAINER" \
+            sh -s <infra/postgres/init-roles.sh
+      - run: pnpm api:sync
+      - run: pnpm api:lint
+      - run: pnpm api:test
+      - run: pnpm api:audit
+
+  contract:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.contract != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: 0.13.6
+          # apps/api too: contract:audit runs the pip-audit locked there.
+          cache-dependency-glob: |
+            tests/contract/uv.lock
+            apps/api/uv.lock
+      - run: pnpm install --frozen-lockfile
+      # Synced here so a dependency failure shows as such, not as the fake pey never starting.
+      - run: pnpm contract:sync
+      - run: pnpm contract:audit
+      # The TS server is the backend in production; the Python app does not serve these routes yet.
+      # The same pytest run collects the fake pey's own tests (testpaths = ["."]).
+      # Defined once and reused: `runner` is not available in job-level `env`.
+      - name: Contract suite against the TS server
+        env: &run-dir
+          RUN_DIR: ${{ runner.temp }}/contract
+        run: pnpm contract:ts
+      - name: Server and fake pey logs
+        if: failure() || cancelled()
+        env: *run-dir
+        run: |
+          shopt -s nullglob
+          logs=("$RUN_DIR"/*.log)
+          if [ "${#logs[@]}" -eq 0 ]; then
+            echo "run-ts.sh left no logs: it stopped before starting the servers"
+          else
+            tail -n +1 "${logs[@]}"
+          fi
+
+  web:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.web != 'false' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    services:
+      # Same database as docker-compose.test.yml, which the apps/server tests use. That file is the
+      # reference for the image: Dependabot bumps its digest, then copy it here.
+      postgres:
+        image: postgres:16-alpine@sha256:1d5b02d3a9941fbd52437db4107f8c52d6297dac553ca1e5c299ebb3756b4857
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: pialy_test
+        ports:
+          - 54329:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d pialy_test"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+      - run: pnpm audit:prod
+
+  ci-ok:
+    needs: [changes, api, contract, web]
+    # always(), not !cancelled(): a cancelled run must turn this check red, not skip it to green.
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          API: ${{ needs.api.result }}
+          API_FLAG: ${{ needs.changes.outputs.api }}
+          CONTRACT: ${{ needs.contract.result }}
+          CONTRACT_FLAG: ${{ needs.changes.outputs.contract }}
+          WEB: ${{ needs.web.result }}
+          WEB_FLAG: ${{ needs.changes.outputs.web }}
+        run: |
+          status=0
+          check() { # job result flag: passed, or skipped because `changes` said false
+            if [ "$2" = success ] || { [ "$2" = skipped ] && [ "$3" = false ]; }; then
+              echo "$1: $2"
+            else
+              echo "::error::$1: $2 (changes: ${3:-no answer})"
+              status=1
+            fi
+          }
+          check changes "$CHANGES" ''
+          check api "$API" "$API_FLAG"
+          check contract "$CONTRACT" "$CONTRACT_FLAG"
+          check web "$WEB" "$WEB_FLAG"
+          exit "$status"
+
+  gitleaks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install gitleaks from its release, checksum pinned
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          curl -fsSL -o "$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS_VERSION/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "$GITLEAKS_SHA256  $archive" | sha256sum --check --strict
+          tar -xzf "$archive" -C "$RUNNER_TEMP" gitleaks
+      # Every commit reachable from HEAD (on a pull request, the merge result), so another branch
+      # cannot turn this check red. gitleaks' default log options, with HEAD in place of --all.
+      - name: Scan the git history
+        run: |
+          "$RUNNER_TEMP/gitleaks" git --config .gitleaks.toml --redact --no-banner --verbose \
+            --log-opts="--full-history --diff-filter=tuxdb HEAD" .

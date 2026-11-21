@@ -1,0 +1,15 @@
+# Secret scan for this public repository: gitleaks' default rules, plus an allowlist for the
+# synthetic booking tokens the tests use as fixtures. Each entry is one exact value, and it is
+# allowed only for the generic-api-key rule and only inside test files. A real secret is never
+# allowlisted: rotate it and remove it from history.
+title = "pialy"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Synthetic booking tokens in test fixtures"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)tests?/|\.test\.tsx?$''']
+regexes = ['''^(Zx9QbW1kT2tlbl9TZWNyZXQ|Xk3_9fQe-2LmNpRsTuVwYz|tok_verify_pass_000001)$''']
