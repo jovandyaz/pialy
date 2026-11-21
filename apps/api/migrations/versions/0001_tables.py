@@ -9,7 +9,7 @@ Rules the tables follow (tests/db/test_schema.py checks each one):
   lead with it, and its unique keys hold within one business. Foreign key checks bypass
   row-level security, so a row points at another table through `(business_id, id)` and can never
   name a row of another business.
-- Money is `bigint` minor units with a three-letter uppercase ISO 4217 code, and repeats the
+- Money is `bigint` minor units with its ISO 4217 currency, MXN the only one taken, and repeats the
   payments-core invariants: amounts are positive, `paid_total_minor` never exceeds the amount and
   agrees with the status.
 - Personal data is stored as hashes and last digits only: the phone as an HMAC-SHA256 hex digest
@@ -32,7 +32,9 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
-CURRENCY = r"~ '^[A-Z]{3}$'"
+# The currencies pialy takes: MXN alone, as CoDi and SPEI settle in pesos. Another one takes a new
+# revision.
+CURRENCY = "IN ('MXN')"
 
 # Shapes of the fields payment_events.raw keeps from pey's payment payload (docs.pey.mx, API
 # 2026-10-20), matched against their text (`#>>`). A value outside them fails the insert with

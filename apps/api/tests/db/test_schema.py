@@ -1138,7 +1138,7 @@ def test_payment_events_reject_a_tracking_key_outside_the_projection_shape(
         add_event(conn, business.id, tracking_key=tracking_key)
 
 
-# --- money: integer minor units, ISO 4217 currency, payments-core invariants ---
+# --- money: integer minor units, MXN as the currency, payments-core invariants ---
 
 
 def test_money_columns_are_bigint_minor_units(owner_db: Database) -> None:
@@ -1175,15 +1175,24 @@ CURRENCY_HOLDERS: list[tuple[str, Callable[[Database, str], None]]] = [
 ]
 
 
-@pytest.mark.parametrize("currency", ["mxn", "MX", "MXNN", "M1N", ""])
+# CoDi and SPEI settle in pesos, so MXN is the one currency stored: a well-formed code that is no
+# currency (ZZZ) and a real one pialy does not take (USD) are refused alike.
+@pytest.mark.parametrize("currency", ["mxn", "MX", "MXNN", "M1N", "", "ZZZ", "USD"])
 @pytest.mark.parametrize(
     ("constraint", "add"), CURRENCY_HOLDERS, ids=[name for name, _ in CURRENCY_HOLDERS]
 )
-def test_currencies_are_iso_4217_codes(
+def test_currencies_other_than_mxn_are_refused(
     owner_db: Database, constraint: str, add: Callable[[Database, str], None], currency: str
 ) -> None:
     with violates(errors.CheckViolation, constraint):
         add(owner_db, currency)
+
+
+@pytest.mark.parametrize(
+    "add", [add for _, add in CURRENCY_HOLDERS], ids=[name for name, _ in CURRENCY_HOLDERS]
+)
+def test_mxn_is_accepted(owner_db: Database, add: Callable[[Database, str], None]) -> None:
+    add(owner_db, "MXN")
 
 
 @pytest.mark.parametrize(
