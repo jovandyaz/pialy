@@ -19,8 +19,11 @@ forbidden_modules =
 name = Only pialy.http and pialy.main import fastapi
 type = forbidden
 source_modules =
-    pialy.booking
-    pialy.config
-    pialy.clock
+    pialy
 forbidden_modules =
     fastapi
+ignore_imports =
+    pialy.http -> fastapi
+    pialy.http.** -> fastapi
+    pialy.main -> fastapi
+unmatched_ignore_imports_alerting = none

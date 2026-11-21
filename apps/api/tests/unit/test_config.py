@@ -7,6 +7,13 @@ from pialy.config import Settings, load_settings
 DATABASE_URL = "postgresql://user:pw@localhost/db"
 KEY_32 = base64.b64encode(b"k" * 32).decode()
 
+SECRETS_ENV = {
+    "SESSION_SECRET": "s" * 32,
+    "CREDENTIALS_ENC_KEY": KEY_32,
+    "PHONE_HASH_SALT": "p" * 16,
+    "AUDIT_HMAC_KEY": "a" * 32,
+}
+
 PROD_ENV = {
     "ENV": "production",
     "DATABASE_URL": DATABASE_URL,
@@ -29,12 +36,51 @@ def failure_text(exc: pytest.ExceptionInfo[SystemExit]) -> str:
 
 
 def test_accepts_minimal_development_env_with_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL})
+    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV})
     settings = load_settings()
     assert isinstance(settings, Settings)
     assert settings.env == "development"
     assert settings.port == 3000
     assert settings.deposit_max_minor == 1
+
+
+@pytest.mark.parametrize("missing", sorted(SECRETS_ENV))
+def test_development_requires_secrets(monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
+    env = {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV}
+    set_env(monkeypatch, {k: v for k, v in env.items() if k != missing})
+    with pytest.raises(SystemExit) as exc:
+        load_settings()
+    assert missing in failure_text(exc)
+
+
+def test_test_env_generates_random_secrets(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(monkeypatch, {"ENV": "test", "DATABASE_URL": DATABASE_URL})
+    assert len(load_settings().session_secret.get_secret_value()) >= 32
+
+
+def test_empty_value_in_production_fails_naming_variable(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(monkeypatch, {**PROD_ENV, "PHONE_HASH_SALT": ""})
+    with pytest.raises(SystemExit) as exc:
+        load_settings()
+    assert "PHONE_HASH_SALT" in failure_text(exc)
+
+
+def test_empty_optional_values_resolve_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(
+        monkeypatch,
+        {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "WEB_ROOT": "", "SENTRY_DSN": ""},
+    )
+    settings = load_settings()
+    assert settings.web_root is None
+    assert settings.sentry_dsn is None
+
+
+def test_rejects_phone_hash_salt_shorter_than_16(monkeypatch: pytest.MonkeyPatch) -> None:
+    env = {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "PHONE_HASH_SALT": "p" * 15}
+    set_env(monkeypatch, env)
+    with pytest.raises(SystemExit) as exc:
+        load_settings()
+    assert "PHONE_HASH_SALT" in failure_text(exc)
 
 
 def test_requires_database_url() -> None:
@@ -65,7 +111,7 @@ def test_requires_every_secret_in_production(monkeypatch: pytest.MonkeyPatch, mi
 
 def test_never_echoes_values_in_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     leaked = "short-value-that-must-not-leak"
-    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, "SESSION_SECRET": leaked})
+    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "SESSION_SECRET": leaked})
     with pytest.raises(SystemExit) as exc:
         load_settings()
     assert "SESSION_SECRET" in failure_text(exc)
@@ -74,7 +120,7 @@ def test_never_echoes_values_in_errors(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_rejects_session_secret_shorter_than_32(monkeypatch: pytest.MonkeyPatch) -> None:
-    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, "SESSION_SECRET": "s" * 31})
+    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "SESSION_SECRET": "s" * 31})
     with pytest.raises(SystemExit):
         load_settings()
     set_env(monkeypatch, {"SESSION_SECRET": "s" * 32})
@@ -83,7 +129,7 @@ def test_rejects_session_secret_shorter_than_32(monkeypatch: pytest.MonkeyPatch)
 
 def test_rejects_credentials_key_not_32_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     bad = base64.b64encode(b"k" * 16).decode()
-    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, "CREDENTIALS_ENC_KEY": bad})
+    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "CREDENTIALS_ENC_KEY": bad})
     with pytest.raises(SystemExit) as exc:
         load_settings()
     assert "CREDENTIALS_ENC_KEY" in failure_text(exc)
@@ -93,5 +139,7 @@ def test_rejects_credentials_key_not_32_bytes(monkeypatch: pytest.MonkeyPatch) -
 def test_accepts_versioned_credentials_key_list(monkeypatch: pytest.MonkeyPatch) -> None:
     other = base64.b64encode(b"o" * 32).decode()
     value = f"v2:{other},v1:{KEY_32}"
-    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, "CREDENTIALS_ENC_KEY": value})
+    set_env(
+        monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "CREDENTIALS_ENC_KEY": value}
+    )
     assert load_settings().credentials_enc_key.get_secret_value() == value

@@ -1,7 +1,8 @@
 """Process settings, read from the environment and validated at startup.
 
-Outside production every key has a random per-process default so a developer
-only needs DATABASE_URL. In production the keys must be set explicitly.
+The four keys (phone_hash_salt, session_secret, credentials_enc_key,
+audit_hmac_key) are required in development and production. Only env == "test"
+gets random per-process values. Empty variables count as unset.
 """
 
 import base64
@@ -14,14 +15,7 @@ from pydantic import AnyHttpUrl, Field, SecretStr, ValidationError, field_valida
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENC_KEY_BYTES = 32
-PRODUCTION_REQUIRED = (
-    "session_secret",
-    "credentials_enc_key",
-    "phone_hash_salt",
-    "audit_hmac_key",
-    "pey_base_url",
-    "public_origin",
-)
+PRODUCTION_REQUIRED = ("pey_base_url", "public_origin")
 
 
 def _random_secret() -> SecretStr:
@@ -43,22 +37,37 @@ def _check_enc_key_entry(entry: str) -> None:
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(frozen=True, extra="ignore", env_file=".env")
+    model_config = SettingsConfigDict(
+        frozen=True, extra="ignore", env_file=".env", env_ignore_empty=True
+    )
 
     env: Literal["development", "test", "production"] = "development"
     port: int = 3000
     database_url: SecretStr
     migration_database_url: SecretStr | None = None
     pey_base_url: AnyHttpUrl = AnyHttpUrl("http://localhost:4010")
-    phone_hash_salt: SecretStr = Field(default_factory=_random_secret)
-    session_secret: SecretStr = Field(default_factory=_random_secret, min_length=32)
-    credentials_enc_key: SecretStr = Field(default_factory=_random_enc_key)
+    phone_hash_salt: SecretStr = Field(min_length=16)
+    session_secret: SecretStr = Field(min_length=32)
+    credentials_enc_key: SecretStr
     deposit_max_minor: int = Field(default=1, ge=1, le=1)  # 1 during the hackathon
     web_root: Path | None = None
     public_origin: AnyHttpUrl = AnyHttpUrl("http://localhost:3000")
-    audit_hmac_key: SecretStr = Field(default_factory=_random_secret, min_length=32)
+    audit_hmac_key: SecretStr = Field(min_length=32)
     sentry_dsn: SecretStr | None = None
     log_level: str = "INFO"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _random_keys_in_test(cls, data: dict[str, object]) -> dict[str, object]:
+        if data.get("env") == "test":
+            data = {
+                "phone_hash_salt": _random_secret(),
+                "session_secret": _random_secret(),
+                "audit_hmac_key": _random_secret(),
+                "credentials_enc_key": _random_enc_key(),
+                **data,
+            }
+        return data
 
     @field_validator("credentials_enc_key")
     @classmethod
