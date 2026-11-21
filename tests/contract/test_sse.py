@@ -10,7 +10,6 @@ from support import Api, Pey, days_ahead, event_stream, is_problem, outcome, slo
 SLOT = slot(days_ahead(1), 0)
 LISTENERS_PER_BOOKING = 20
 RECONNECT_BLOCK = "retry: 2000"
-HOLDING_BLOCK = 'data: {"type":"booking.updated","status":"holding"}'
 CONFIRMED_BLOCK = 'data: {"type":"booking.updated","status":"confirmed"}'
 
 
@@ -29,9 +28,7 @@ def test_streams_the_booking_topic_event_stream_headers_reconnect_delay_then_eve
 
         assert outcome(pey.pay(booking.push_ref)) == "applied"
 
-        while (block := stream.next_data()) == HOLDING_BLOCK:
-            pass
-        assert block == CONFIRMED_BLOCK
+        assert stream.next_data_after_holding() == CONFIRMED_BLOCK
 
 
 def open_listeners(stack: ExitStack, api: Api, token: str, count: int) -> None:

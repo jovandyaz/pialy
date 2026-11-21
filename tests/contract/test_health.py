@@ -3,14 +3,15 @@
 import httpx
 
 from support import Api, is_problem, new_key
+from targets import Target
 
 
-def test_reports_ok_with_a_reachable_database(client: httpx.Client) -> None:
-    """The body differs by backend (`{ok, db}` on TS); both answer 200 JSON while the database is up."""
+def test_reports_ok_with_a_reachable_database(client: httpx.Client, target: Target) -> None:
     response = client.get("/healthz")
 
     assert response.status_code == 200
     assert "application/json" in response.headers["content-type"]
+    assert response.json() == target.health_body()
 
 
 def test_sets_security_headers(client: httpx.Client) -> None:

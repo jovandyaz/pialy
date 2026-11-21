@@ -2,8 +2,8 @@
 
 import json
 import re
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 
 import httpx
@@ -16,6 +16,7 @@ from support import (
     PHONE,
     PROBLEM,
     PUSH_FAILED,
+    TOO_MANY_ATTEMPTS,
     Api,
     IpPool,
     Pey,
@@ -27,6 +28,7 @@ from support import (
     new_client,
     new_key,
     parse_iso,
+    race,
     slot,
 )
 from targets import Target
@@ -34,7 +36,6 @@ from targets import Target
 SLOT_DAY = days_ahead(1)
 SLOT = slot(SLOT_DAY, 0)
 IP_LIMIT = 10
-IP_LIMIT_DETAIL = "Demasiados intentos. Espera unos minutos."
 PHONE_HOLD_LIMIT = 3
 PHONE_LIMIT_WINDOW_SECONDS = "600"
 RACE_ROUNDS = 4
@@ -115,12 +116,11 @@ def test_two_concurrent_holds_of_one_slot_with_different_keys_one_is_held_the_ot
     api: Api, pey: Pey
 ) -> None:
     """RF2 of hold-slot.test.ts: two phones, two keys, one slot; repeated on several slots."""
-    for race in range(RACE_ROUNDS):
-        at = slot(SLOT_DAY, race)
-        bodies = [{"slotStart": at.start, "phone": race_phone(2 * race + side)} for side in (0, 1)]
+    for index in range(RACE_ROUNDS):
+        at = slot(SLOT_DAY, index)
+        bodies = [{"slotStart": at.start, "phone": race_phone(2 * index + side)} for side in (0, 1)]
 
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            responses = list(pool.map(lambda body: api.hold(body, new_key()), bodies))
+        responses = race(*(partial(api.hold, body, new_key()) for body in bodies))
 
         assert sorted(r.status_code for r in responses) == [201, 409], at
         taken = next(r for r in responses if r.status_code == 409)
@@ -152,7 +152,7 @@ def assert_ip_limited(response: httpx.Response) -> None:
     assert is_problem(response, 429)
     assert "retry-after" in response.headers
     assert response.json()["status"] == 429
-    assert response.json()["detail"] == IP_LIMIT_DETAIL
+    assert response.json()["detail"] == TOO_MANY_ATTEMPTS
 
 
 def test_answers_429_to_the_11th_request_from_one_ip_in_10_minutes_and_not_to_another_ip(
@@ -229,11 +229,10 @@ def test_answers_429_to_the_4th_hold_for_one_phone_within_10_minutes_replaying_a
 def test_answers_409_to_a_second_concurrent_hold_for_the_same_phone_then_allows_one_after_the_first_expires(
     api: Api,
 ) -> None:
-    """Only the concurrent half: the expiry half needs the clock and is ported in-process (Task 15)."""
+    """Only the concurrent half: the expiry half needs clock control."""
     bodies = [{"slotStart": slot(days_ahead(1), index).start, "phone": PHONE} for index in (0, 3)]
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        responses = list(pool.map(lambda body: api.hold(body, new_key()), bodies))
+    responses = race(*(partial(api.hold, body, new_key()) for body in bodies))
 
     assert sorted(r.status_code for r in responses) == [201, 409]
     conflict = next(r for r in responses if r.status_code == 409)

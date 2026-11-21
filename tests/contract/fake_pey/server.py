@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, TypeGuard
 from urllib.parse import urlsplit
 
 from agent_toolkit.webhooks.testing import sign
@@ -93,6 +93,11 @@ class State:
     failures: list[int] = field(default_factory=list)
     stall_next: bool = False
     stalled: list[threading.Event] = field(default_factory=list)
+
+
+def is_int(value: object) -> TypeGuard[int]:
+    """A JSON integer: `true` and `false` parse to Python ints but are not counts or codes."""
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def pesos(minor: int) -> float:
@@ -192,8 +197,13 @@ class FakePey:
 
     def pay(self, body: Json) -> Json:
         provider_ref, amount = body.get("provider_ref"), body.get("amount")
-        if not isinstance(provider_ref, str) or not isinstance(amount, int):
+        fee, bank_code = body.get("fee", 0), body.get("bank_code", DEFAULT_BANK_CODE)
+        if not isinstance(provider_ref, str) or not is_int(amount):
             raise ControlError(HTTPStatus.BAD_REQUEST, "provider_ref (str) and amount (int, minor units) are required")
+        if not is_int(fee):
+            raise ControlError(HTTPStatus.BAD_REQUEST, "fee must be an int (minor units)")
+        if bank_code is not None and not is_int(bank_code):
+            raise ControlError(HTTPStatus.BAD_REQUEST, "bank_code must be an int, or null to leave it out")
         with self._lock:
             charge = self._state.charges.get(provider_ref)
             if charge is None:
@@ -206,10 +216,10 @@ class FakePey:
                 transaction_id=charge.ref if charge.kind == "pn" else new_transaction_id(),
                 charge=charge,
                 amount_minor=amount,
-                fee_minor=int(body.get("fee", 0)),
+                fee_minor=fee,
                 date_paid=date_paid,
                 tracking_key=digits(TRACKING_KEY_DIGITS),
-                bank_code=body.get("bank_code", DEFAULT_BANK_CODE),
+                bank_code=bank_code,
             )
             self._state.payments[payment.transaction_id] = payment
         external = body.get("external_metadata", charge.metadata)
@@ -245,6 +255,8 @@ class FakePey:
                 status, content_type, text = response.status, response.headers.get("content-type"), response.read()
         except urllib.error.HTTPError as error:
             status, content_type, text = error.code, error.headers.get("content-type"), error.read()
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+            raise ControlError(HTTPStatus.BAD_GATEWAY, f"delivery to {url} failed: {error}") from error
         return {
             "delivery": delivery,
             "response": {"status": status, "content_type": content_type, "body": parse_json(text.decode())},
@@ -252,12 +264,16 @@ class FakePey:
 
     def fail_next(self, body: Json) -> None:
         status, times = body.get("status"), body.get("times", 1)
-        if not isinstance(status, int) or not HTTPStatus.BAD_REQUEST <= status <= MAX_HTTP_STATUS:
+        if not is_int(status) or not HTTPStatus.BAD_REQUEST <= status <= MAX_HTTP_STATUS:
             raise ControlError(HTTPStatus.BAD_REQUEST, "status must be an int from 400 to 599")
-        if not isinstance(times, int) or times < 1:
+        if not is_int(times) or times < 1:
             raise ControlError(HTTPStatus.BAD_REQUEST, "times must be a positive int")
         with self._lock:
             self._state.failures.extend([status] * times)
+
+    def clear_failures(self) -> None:
+        with self._lock:
+            self._state.failures.clear()
 
     def stall_next(self) -> None:
         with self._lock:
@@ -368,6 +384,8 @@ class Handler(BaseHTTPRequestHandler):
                 return pey.deliver(body)
             case "/_control/fail-next":
                 pey.fail_next(body)
+            case "/_control/clear-failures":
+                pey.clear_failures()
             case "/_control/stall-next":
                 pey.stall_next()
             case "/_control/release":

@@ -1,6 +1,7 @@
 """Payments through the webhook: QR payments, double payments and races between deliveries."""
 
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 from typing import Literal
 
 import httpx
@@ -13,7 +14,6 @@ from support import (
     UNKNOWN_TX,
     Api,
     Booking,
-    EventStream,
     Json,
     Pey,
     days_ahead,
@@ -21,13 +21,13 @@ from support import (
     new_key,
     outcome,
     pn_webhook,
+    race,
     slot,
 )
 
 SLOT_DAY = days_ahead(1)
 SLOT = slot(SLOT_DAY, 0)
 BOOKING_CONFIRMED = {"type": "booking.updated", "status": "confirmed"}
-HOLDING_BLOCK = 'data: {"type":"booking.updated","status":"holding"}'
 FLAG_RAISED_BLOCK = 'data: {"type":"flag.raised"}'
 
 
@@ -35,15 +35,7 @@ def failed_hold(api: Api, pey: Pey, phone: str = PHONE) -> str:
     """Holds SLOT while pey fails the push (the hold ends at once) and returns the attempt id it sent."""
     pey.fail_next(500)
     assert api.hold({"slotStart": SLOT.start, "phone": phone}, new_key()).status_code == 502
-    attempt_id: str = pey.requests("POST", "/codi/pn")[-1]["body"]["metadata"]["attemptId"]
-    return attempt_id
-
-
-def next_board_notice(board: EventStream) -> str:
-    """The next board event after the hold's own `holding` notice, which may still be in flight."""
-    while (block := board.next_data()) == HOLDING_BLOCK:
-        pass
-    return block
+    return pey.last_push_attempt_id()
 
 
 def test_answers_201_when_the_push_call_failed_but_its_payment_already_confirmed_the_booking(
@@ -117,9 +109,8 @@ def test_flags_refund_due_for_a_late_payment_whose_slot_was_taken_and_still_reco
 
 def test_flags_refund_due_for_a_second_payment_of_a_confirmed_booking(api: Api, pey: Pey, owner: httpx.Client) -> None:
     booking = api.confirmed(SLOT)
-    attempt_id = pey.requests("POST", "/codi/pn")[-1]["body"]["metadata"]["attemptId"]
 
-    second = pey.deliver(pn_webhook(new_transaction_id(), attempt_id=attempt_id))
+    second = pey.deliver(pn_webhook(new_transaction_id(), attempt_id=pey.last_push_attempt_id()))
 
     assert outcome(second) == "applied"
     assert api.view(booking.token)["status"] == "confirmed"
@@ -146,7 +137,7 @@ def test_tells_the_board_about_an_amount_mismatch_while_the_booking_keeps_holdin
     with event_stream(owner, api.url("/board/events")) as board:
         assert outcome(pey.pay(booking.push_ref, amount=2)) == "unmatched"
 
-        assert next_board_notice(board) == FLAG_RAISED_BLOCK
+        assert board.next_data_after_holding() == FLAG_RAISED_BLOCK
     assert api.view(booking.token)["status"] == "holding"
     [flag] = api.flags(owner)
     assert flag["kind"] == "amount_mismatch"
@@ -201,8 +192,7 @@ def test_confirms_once_and_reports_the_other_as_a_second_payment_when_two_paymen
     booking = api.book(SLOT)
     qr_id = api.qr(booking.token)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        deliveries = list(pool.map(pey.pay, [booking.push_ref, qr_id]))
+    deliveries = race(partial(pey.pay, booking.push_ref), partial(pey.pay, qr_id))
 
     assert [outcome(d) for d in deliveries] == ["applied", "applied"]
     assert api.view(booking.token)["status"] == "confirmed"
@@ -213,8 +203,7 @@ def test_confirms_once_and_reports_the_other_as_a_second_payment_when_two_paymen
 def test_records_an_unmatched_payment_once_when_two_deliveries_race(api: Api, pey: Pey, owner: httpx.Client) -> None:
     body = pn_webhook(UNKNOWN_TX)
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        deliveries = list(pool.map(lambda _: pey.deliver(body), range(2)))
+    deliveries = race(*[partial(pey.deliver, body)] * 2)
 
     assert sorted(outcome(d) for d in deliveries) == ["duplicate", "unmatched"]
     [flag] = api.flags(owner)

@@ -3,6 +3,7 @@
 import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from functools import partial
 
 import httpx
 
@@ -16,6 +17,7 @@ from support import (
     failed_with_problem,
     outcome,
     pn_webhook,
+    race,
     redeliver,
     slot,
 )
@@ -23,11 +25,11 @@ from support import (
 SLOT_DAY = days_ahead(1)
 SLOT = slot(SLOT_DAY, 0)
 EXPECTED_MONEY = {"amountMinor": DEPOSIT_MINOR, "currency": "MXN"}
-
-
-def push_attempt_id(pey: Pey) -> str:
-    attempt_id: str = pey.requests("POST", "/codi/pn")[-1]["body"]["metadata"]["attemptId"]
-    return attempt_id
+INTERNAL_ERROR = {"type": "about:blank", "title": "Internal Server Error", "status": 500}
+# More failures than any sane retry policy makes, so the rail stays down whatever the target's count.
+RAIL_OUTAGE_FAILURES = 10
+# Fields a payload validation error would name; none may reach the sender.
+VALIDATED_FIELDS = ("transactionId", "datePaid", "metadata")
 
 
 def test_applies_a_signed_payment_once_booking_confirmed_money_trace_outbox_and_inbox_rows(api: Api, pey: Pey) -> None:
@@ -55,6 +57,22 @@ def test_answers_a_redelivery_of_the_same_webhook_id_as_duplicate_without_new_ro
     assert response.json() == {"status": "duplicate"}
     assert api.view(booking.token) == view_before
     assert api.board(owner, SLOT_DAY) == board_before
+
+
+def test_applies_one_of_two_concurrent_deliveries_of_the_same_webhook_id_and_answers_the_other_as_duplicate(
+    api: Api, pey: Pey, owner: httpx.Client
+) -> None:
+    booking = api.book(SLOT)
+    signed = pey.pay(booking.push_ref, send=False)
+
+    responses = race(*[partial(redeliver, api.client, signed)] * 2)
+
+    assert [r.status_code for r in responses] == [200, 200]
+    assert sorted(r.json()["status"] for r in responses) == ["applied", "duplicate"]
+    view = api.view(booking.token)
+    assert view["status"] == "confirmed"
+    assert view["attempts"] == [{"mode": "push", "status": "succeeded"}]
+    assert api.flags(owner) == []
 
 
 def test_rejects_a_tampered_body_with_401_writes_nothing_and_logs_only_the_webhook_id(
@@ -144,13 +162,15 @@ def test_answers_500_and_records_nothing_when_the_rail_cannot_confirm_the_amount
 ) -> None:
     """The TS test reconciles in process; from outside, pey's redelivery after the 500 is what applies it."""
     booking = api.book(SLOT)
-    pey.fail_next(503, times=3)
+    pey.fail_next(503, times=RAIL_OUTAGE_FAILURES)
 
     paid = pey.pay(booking.push_ref, fee=2)
 
     assert failed_with_problem(paid, 500)
+    assert pey.calls("GET", f"/transaction/{booking.push_ref}") >= 1
     assert api.view(booking.token)["status"] == "holding"
     assert api.flags(owner) == []
+    pey.clear_failures()
     assert redeliver(api.client, paid).json() == {"status": "applied"}
     assert api.view(booking.token)["status"] == "confirmed"
 
@@ -163,6 +183,10 @@ def test_answers_500_to_a_signed_but_malformed_payment_event_so_pey_retries_and_
     delivered = pey.deliver({"type": "codi.pn.payment_received", "amount": 0.01})
 
     assert failed_with_problem(delivered, 500)
+    problem = delivered["response"]["body"]
+    assert INTERNAL_ERROR.items() <= problem.items(), problem
+    assert "detail" not in problem
+    assert [field for field in VALIDATED_FIELDS if field in json.dumps(problem)] == []
     assert api.view(booking.token)["status"] == "holding"
     assert api.flags(owner) == []
 
@@ -172,7 +196,7 @@ def test_keeps_the_raw_body_out_of_the_logs_when_storing_the_payment_fails(
 ) -> None:
     """Postgres jsonb rejects \\u0000, so storing the raw body fails; the log half is not observable."""
     booking = api.book(SLOT)
-    body = pn_webhook(booking.push_ref, attempt_id=push_attempt_id(pey), concept="Anticipo\u0000cita")
+    body = pn_webhook(booking.push_ref, attempt_id=pey.last_push_attempt_id(), concept="Anticipo\u0000cita")
 
     delivered = pey.deliver(body)
 

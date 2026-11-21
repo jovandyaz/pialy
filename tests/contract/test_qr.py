@@ -2,6 +2,7 @@
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from functools import partial
 
 import httpx
 import pytest
@@ -21,6 +22,7 @@ from support import (
     is_problem,
     new_key,
     outcome,
+    race,
     slot,
     slot_today,
 )
@@ -169,8 +171,7 @@ def test_lets_only_one_of_two_concurrent_requests_take_the_last_attempt(api: Api
     booking = api.book(SLOT)
     assert api.post_qr(booking.token, new_key()).status_code == 201
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        responses = list(pool.map(lambda _: api.post_qr(booking.token, new_key()), range(2)))
+    responses = race(partial(api.post_qr, booking.token, new_key()), partial(api.post_qr, booking.token, new_key()))
 
     assert sorted(r.status_code for r in responses) == [201, 429]
     assert len(api.view(booking.token)["attempts"]) == 3

@@ -4,8 +4,11 @@ from collections.abc import Iterator
 import httpx
 import pytest
 
-from support import Api, IpPool, Pey, new_client
-from targets import Target, target_from_env, target_name
+# Before the import: only test modules and conftest files get assertion rewriting by default.
+pytest.register_assert_rewrite("support")
+
+from support import REQUEST_TIMEOUT_SECONDS, Api, IpPool, Pey, new_client  # noqa: E402
+from targets import Target, target_from_env, target_name  # noqa: E402
 
 ONLY_MARKERS = {"ts_only": "ts", "py_only": "py"}
 
@@ -49,7 +52,7 @@ def services_up(base_url: str, pey_url: str) -> None:
 
 @pytest.fixture
 def pey(base_url: str, pey_url: str, target: Target) -> Iterator[Pey]:
-    with httpx.Client(base_url=pey_url) as client:
+    with httpx.Client(base_url=pey_url, timeout=REQUEST_TIMEOUT_SECONDS) as client:
         yield Pey(client, f"{base_url}{target.webhook_path()}")
 
 

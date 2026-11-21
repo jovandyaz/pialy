@@ -13,6 +13,7 @@ from support import (
     PROBLEM,
     SLOTS_PER_DAY,
     THIRD_PHONE,
+    TOO_MANY_ATTEMPTS,
     Api,
     Pey,
     days_ahead,
@@ -29,7 +30,6 @@ from targets import Target, TsTarget
 
 DAY = days_ahead(1)
 PIN_ATTEMPTS_PER_IP = 5
-PIN_LIMIT_DETAIL = "Demasiados intentos. Espera unos minutos."
 SESSION_SECONDS = 12 * 3600
 UNKNOWN_FLAG_ID = "2c4e6a1e-1f6e-4d5a-9a53-3f3b2f6e9d11"
 
@@ -67,7 +67,7 @@ def test_rejects_a_wrong_pin_and_limits_attempts_to_5_per_10_minutes_per_ip_the_
     assert statuses == [401] * PIN_ATTEMPTS_PER_IP + [429]
     assert is_problem(limited, 429)
     assert limited.json()["status"] == 429
-    assert limited.json()["detail"] == PIN_LIMIT_DETAIL
+    assert limited.json()["detail"] == TOO_MANY_ATTEMPTS
     assert login(ts(target).pin).status_code == 429
 
 
@@ -90,7 +90,7 @@ def test_sets_a_signed_httponly_samesite_strict_cookie_that_lasts_12_hours(
 def test_accepts_the_cookie_and_rejects_a_tampered_one_and_one_older_than_12_hours(
     api: Api, owner: httpx.Client, base_url: str
 ) -> None:
-    """The 12-hour half needs the clock (Task 15). Tampering works on whatever cookies the login set."""
+    """The 12-hour half needs clock control. Tampering works on whatever cookies the login set."""
     url = api.url(f"/board?date={DAY.isoformat()}")
     session = {cookie.name: cookie.value for cookie in owner.cookies.jar}
 
@@ -153,7 +153,7 @@ def test_lists_the_day_with_each_booking_as_name_last_4_and_bank_name_and_never_
 def test_lists_bookings_paid_in_the_last_15_minutes_for_any_day_with_only_what_the_payment_notice_needs(
     api: Api, pey: Pey, owner: httpx.Client
 ) -> None:
-    """Leaving out a payment older than 15 minutes needs the clock (Task 15)."""
+    """Leaving out a payment older than 15 minutes needs clock control."""
     day = days_ahead(3)
     older = api.book(slot(day, 0), customer_name=CUSTOMER)
     older_paid = pey.pay(older.push_ref, bank_code=None)

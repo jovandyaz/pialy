@@ -8,8 +8,8 @@ on the backend.
 
 ```
 conftest.py      fixtures: target, anonymous client, signed-in owner client, fake pey control
-targets.py       Target protocol, TsTarget, PyTarget (prefix, webhook path, login, reset_db)
-support.py       the seeded business's calendar, booking helpers, fake pey control, SSE reader
+targets.py       Target protocol, TsTarget, PyTarget (prefix, webhook path, health body, login, reset_db)
+support.py       the seeded business's calendar, booking helpers, races, fake pey control, SSE reader
 fake_pey/        the fake pey server (stdlib ThreadingHTTPServer)
 web_root/        the SPA build the target serves for test_static.py
 run-ts.sh        one-command run against a fresh TS server
@@ -105,9 +105,10 @@ Control endpoints (amounts in integer centavos):
 
 | Call | Body | Effect |
 |---|---|---|
-| `POST /_control/pay` | `provider_ref` (push `transactionId` or QR id), `amount`, optional `fee`, `late`, `bank_code` (`null` omits it), `external_metadata`, `webhook_url`, `send` | records the payment (pey then reports it `PAID`) and delivers its signed `codi.pn`/`codi.qr.payment_received` webhook; the webhook amount is `amount + fee`, the rail's base is `amount`; `late` dates it one second after the charge expired |
+| `POST /_control/pay` | `provider_ref` (push `transactionId` or QR id), `amount`, optional `fee`, `late`, `bank_code` (`null` omits it), `external_metadata`, `webhook_url`, `send` | records the payment (pey then reports it `PAID`) and delivers its signed `codi.pn`/`codi.qr.payment_received` webhook; the webhook amount is `amount + fee`, the rail's base is `amount`; `amount`, `fee` and `bank_code` must be JSON integers; `late` dates it one second after the charge expires (see below) |
 | `POST /_control/deliver` | `body` (JSON or a raw string), optional `webhook_id`, `webhook_url`, `send` | signs and delivers any body |
 | `POST /_control/fail-next` | `status` (400–599), optional `times` | the next API calls answer that status with a pey error body |
+| `POST /_control/clear-failures` | | drops the failures still queued by `fail-next` |
 | `POST /_control/stall-next` | | the next API call waits (up to 30 s) until `/_control/release` |
 | `POST /_control/release` | | lets stalled calls answer |
 | `POST /_control/reset` | | forgets charges, payments, recorded calls, failures and stalls |
@@ -115,14 +116,24 @@ Control endpoints (amounts in integer centavos):
 
 `pay` and `deliver` answer `{delivery: {url, headers, body}, response: {status, content_type, body}}`
 (`pay` adds `transaction_id`, `tracking_key`, `date_paid`); with `"send": false` the signed delivery
-is returned without posting it, for a test to tamper with or post itself.
+is returned without posting it, for a test to tamper with or post itself. A delivery the target
+never answers (refused, reset or timed out) makes the control call answer 502.
+
+`late` only moves the payment's `datePaid` to one second after the charge's expiry. While the hold
+lasts that instant is still in the future on the real clock, so `late` is meaningful only against a
+target whose clock was moved past the expiry; no test here uses it.
 
 ## Not covered here
 
 Cases of `apps/server/test` that need control of the clock are ported in process with an injected
-clock (Task 15, `docs/superpowers/plans/ts-to-py-time-tests.md`). Also left out: unit tests of
-internals (the SSE hub, the outbox relay, the unit of work), assertions on server logs or on stored
-rows that no route exposes, states no route can reach (`expired` with a token, `canceled`), and
-cases that need another server configuration (production cookies, no web root, a 500-listener hub,
-shutdown). A few TS tests mix both halves; their contract test keeps the half that needs no clock
-and says so in its docstring.
+clock (Task 15). One case is left out by name: `board.test.ts:115`, the cap of 20 wrong PINs across
+all IPs. Tripping it locks the owner out of the shared server for the rest of the 10-minute window
+(every later login case would fail), and its second half, the lockout lifting when the window passes,
+needs the clock.
+
+Also left out: unit tests of internals (the SSE hub, the outbox relay, the unit of work), assertions
+on server logs or on stored rows that no route exposes, states no route can reach (`expired` with a
+token, `canceled`), and cases that need another server configuration (production cookies, no web
+root, a 500-listener hub, shutdown). A few TS tests mix both halves; their contract test keeps the
+half that needs no clock and says so in its docstring. Races release their requests together through
+a barrier, which makes them overlap more often but cannot guarantee the server sees them at once.

@@ -6,9 +6,11 @@ import itertools
 import json
 import random
 import secrets
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -40,6 +42,8 @@ THIRD_PHONE = "8112345678"
 CUSTOMER = "Cliente Demo"
 UNKNOWN_TX = "01UNKNOWNTX000000000000000"
 UNMATCHED_TRACKING_KEY = "0000000001"
+TOO_MANY_ATTEMPTS = "Demasiados intentos. Espera unos minutos."
+HOLDING_BLOCK = 'data: {"type":"booking.updated","status":"holding"}'
 PUSH_FAILED = {
     "type": "urn:pialy:problem:push-failed",
     "title": "Bad Gateway",
@@ -50,6 +54,7 @@ CLOCK_SKEW = timedelta(seconds=5)
 REQUEST_TIMEOUT_SECONDS = 15.0
 WAIT_SECONDS = 5.0
 POLL_SECONDS = 0.02
+RACE_START_TIMEOUT_SECONDS = 5.0
 TODAY_SLOT_LEAD = timedelta(minutes=5)
 # 10.0.0.0/8: a random base per run keeps two runs on one server from sharing per-IP limits.
 PRIVATE_NETWORK = int(IPv4Address("10.0.0.0"))
@@ -151,6 +156,21 @@ def wait_until[T](probe: Callable[[], T | None], what: str) -> T:
     raise AssertionError(f"timed out waiting for {what}")
 
 
+def race[T](*calls: Callable[[], T]) -> list[T]:
+    """Runs each call on its own thread, all released by one barrier, and returns their results in order.
+
+    The barrier makes the requests overlap more often; it cannot guarantee the server sees them at once.
+    """
+    start = threading.Barrier(len(calls), timeout=RACE_START_TIMEOUT_SECONDS)
+
+    def run(call: Callable[[], T]) -> T:
+        start.wait()
+        return call()
+
+    with ThreadPoolExecutor(max_workers=len(calls)) as pool:
+        return list(pool.map(run, calls))
+
+
 class Pey:
     """Drives the fake pey's control endpoints."""
 
@@ -170,6 +190,10 @@ class Pey:
     def fail_next(self, status: int, times: int = 1) -> None:
         self._control("fail-next", {"status": status, "times": times})
 
+    def clear_failures(self) -> None:
+        """Drops the failures `fail_next` queued that no call has used yet."""
+        self._control("clear-failures")
+
     def stall_next(self) -> None:
         self._control("stall-next")
 
@@ -184,6 +208,11 @@ class Pey:
 
     def calls(self, method: str, path: str) -> int:
         return len(self.requests(method, path))
+
+    def last_push_attempt_id(self) -> str:
+        """The attempt id the target put in the metadata of its latest push charge."""
+        attempt_id: str = self.requests("POST", "/codi/pn")[-1]["body"]["metadata"]["attemptId"]
+        return attempt_id
 
     def wait_for(self, method: str, path: str, count: int = 1) -> list[Json]:
         return wait_until(
@@ -316,6 +345,12 @@ class EventStream:
     def next_data(self) -> str:
         """The next `data:` block as sent, skipping heartbeat comments."""
         while not (block := self.next_block()).startswith("data: "):
+            pass
+        return block
+
+    def next_data_after_holding(self) -> str:
+        """The next `data:` block other than the hold's own `holding` notice, which may still be in flight."""
+        while (block := self.next_data()) == HOLDING_BLOCK:
             pass
         return block
 

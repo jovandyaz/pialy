@@ -1,12 +1,12 @@
 """`POST /bookings/{token}/check-in`. A pass checks in only on its own local day, so the
 successful cases book a slot later today and skip when none is left."""
 
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+from functools import partial
 
 import httpx
 
-from support import Api, assert_close, days_ahead, event_stream, is_problem, slot, slot_today, unknown_token
+from support import Api, assert_close, days_ahead, event_stream, is_problem, race, slot, slot_today, unknown_token
 
 BOOKING_CHECKED_IN = {"type": "booking.updated", "status": "checked_in"}
 
@@ -63,8 +63,7 @@ def test_refuses_a_confirmed_pass_on_any_other_local_day_and_leaves_it_usable(ap
 def test_lets_exactly_one_of_two_simultaneous_check_ins_win(api: Api, owner: httpx.Client) -> None:
     booking = api.confirmed(slot_today())
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        responses = list(pool.map(lambda _: check_in(api, owner, booking.token), range(2)))
+    responses = race(*[partial(check_in, api, owner, booking.token)] * 2)
 
     assert sorted(r.status_code for r in responses) == [200, 409]
 

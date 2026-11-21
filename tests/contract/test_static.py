@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from support import PROBLEM, assert_problem
+from targets import Target
 
 WEB_ROOT = Path(__file__).parent / "web_root"
 INDEX = (WEB_ROOT / "index.html").read_text()
@@ -86,9 +87,9 @@ def test_keeps_problem_json_404_for_unknown_non_get_requests(client: httpx.Clien
     assert PROBLEM in response.headers["content-type"]
 
 
-def test_leaves_existing_routes_unaffected(client: httpx.Client) -> None:
-    """The health body differs by backend; serving the SPA must leave the route answering."""
+def test_leaves_existing_routes_unaffected(client: httpx.Client, target: Target) -> None:
     response = client.get("/healthz")
 
     assert response.status_code == 200
     assert "application/json" in response.headers["content-type"]
+    assert response.json() == target.health_body()

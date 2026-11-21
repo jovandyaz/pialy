@@ -12,7 +12,7 @@ run_dir=$(mktemp -d)
 pids=()
 
 cleanup() {
-  for pid in "${pids[@]}"; do kill "$pid" 2>/dev/null || true; done
+  for pid in ${pids[@]+"${pids[@]}"}; do kill "$pid" 2>/dev/null || true; done
   wait 2>/dev/null || true
   rm -f "$run_dir/pey-secret"
   echo "logs: $run_dir"
@@ -38,10 +38,15 @@ pin=$(($(od -An -N4 -tu4 /dev/urandom) % 900000 + 100000))
   >"$run_dir/fake-pey.log" 2>&1 &
 pids+=($!)
 
-(cd "$root/apps/server" && exec env NODE_ENV=development PORT="$server_port" DATABASE_URL="$database_url" \
-  PEY_API_KEY=fake-pey-key PEY_BASE_URL="http://127.0.0.1:$pey_port" PEY_WEBHOOK_SECRET="$webhook_secret" \
-  BUSINESS_PIN="$pin" COOKIE_SECRET="$(openssl rand -hex 32)" PHONE_HASH_SALT="$(openssl rand -hex 16)" \
-  WEB_ROOT="$here/web_root" node dist/main.js) >"$run_dir/server.log" 2>&1 &
+# Exported rather than passed to `env`, so the secrets stay out of any process's argv.
+(
+  cd "$root/apps/server"
+  export NODE_ENV=development PORT="$server_port" DATABASE_URL="$database_url" PEY_API_KEY=fake-pey-key
+  export PEY_BASE_URL="http://127.0.0.1:$pey_port" PEY_WEBHOOK_SECRET="$webhook_secret" BUSINESS_PIN="$pin"
+  COOKIE_SECRET="$(openssl rand -hex 32)" PHONE_HASH_SALT="$(openssl rand -hex 16)" WEB_ROOT="$here/web_root"
+  export COOKIE_SECRET PHONE_HASH_SALT WEB_ROOT
+  exec node dist/main.js
+) >"$run_dir/server.log" 2>&1 &
 pids+=($!)
 
 for url in "http://127.0.0.1:$server_port/healthz" "http://127.0.0.1:$pey_port/_control/requests"; do
