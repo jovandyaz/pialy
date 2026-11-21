@@ -272,10 +272,13 @@ STATEMENTS = (
             ),
         -- When pey says the payment was made: its datePaid (Unix seconds), which Task 11 parses
         -- into this typed timestamp. A timestamp cannot carry a phone the way the bare number
-        -- could, so datePaid stays out of raw.
+        -- could, so datePaid stays out of raw. The bounds carry their offset: a literal without
+        -- one is read in the TimeZone of the session creating the CHECK, and stays so.
         paid_at           timestamptz
             CONSTRAINT payment_events_paid_at_check CHECK (
-                paid_at IS NULL OR (paid_at >= '2020-01-01' AND paid_at < '2100-01-01')
+                paid_at IS NULL OR (
+                    paid_at >= '2020-01-01 00:00:00+00' AND paid_at < '2100-01-01 00:00:00+00'
+                )
             ),
         late              boolean     NOT NULL DEFAULT false,
         raw               jsonb       NOT NULL,

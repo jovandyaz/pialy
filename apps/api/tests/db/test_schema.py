@@ -10,7 +10,7 @@ on a different rule than the one it names. Fixtures are synthetic.
 import hmac
 import secrets
 from collections.abc import Callable, Iterator, Mapping
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -1002,15 +1002,21 @@ def test_payment_events_refuse_date_paid_in_raw(owner_db: Database, date_paid: o
 
 
 # paid_at is pey's datePaid parsed to a timestamp: typed, so it holds no phone, and bounded to a
-# plausible payment time, with no limit in 2033 any more. The test cluster runs in UTC, the
-# TimeZone the CHECK's bounds were read in when 0001 ran.
+# plausible payment time, with no limit in 2033 any more. The bounds are UTC instants, whatever
+# TimeZone 0001 runs in (test_the_paid_at_bounds_are_utc_whatever_time_zone_0001_runs_in).
+PAID_AT_FIRST = datetime(2020, 1, 1, tzinfo=UTC)
+PAID_AT_LAST = datetime(2099, 12, 31, 23, 59, 59, 999999, tzinfo=UTC)
+PAID_AT_BEFORE = datetime(2019, 12, 31, 23, 59, 59, 999999, tzinfo=UTC)
+PAID_AT_AFTER = datetime(2100, 1, 1, tzinfo=UTC)
+
+
 @pytest.mark.parametrize(
     "paid_at",
     [
         datetime.fromtimestamp(DATE_PAID, UTC),
-        datetime(2020, 1, 1, tzinfo=UTC),
+        PAID_AT_FIRST,
         datetime.fromtimestamp(2_000_000_000, UTC),
-        datetime(2099, 12, 31, 23, 59, 59, 999999, tzinfo=UTC),
+        PAID_AT_LAST,
         None,
     ],
     ids=["fixture", "first-instant", "after-2033-05-18", "last-instant", "null"],
@@ -1030,8 +1036,8 @@ def test_payment_events_accept_a_paid_at_in_range(
 @pytest.mark.parametrize(
     "paid_at",
     [
-        datetime(2019, 12, 31, 23, 59, 59, 999999, tzinfo=UTC),
-        datetime(2100, 1, 1, tzinfo=UTC),
+        PAID_AT_BEFORE,
+        PAID_AT_AFTER,
         datetime(1970, 1, 1, tzinfo=UTC),
         datetime.fromtimestamp(int(PHONE), UTC),
     ],
@@ -1046,6 +1052,32 @@ def test_payment_events_refuse_a_paid_at_out_of_range(
         owner_db.tenant(context(business.id)) as conn,
     ):
         add_event(conn, business.id, paid_at=paid_at)
+
+
+def test_the_paid_at_bounds_are_utc_whatever_time_zone_0001_runs_in(
+    database_at: ThrowawayDatabaseFactory,
+) -> None:
+    # A timestamptz literal without an offset is read in the session's TimeZone once, when the
+    # CHECK is created, so a deploy migrating at UTC-6 would move the bounds 6 hours. libpq
+    # sends PGTZ as the session TimeZone (libpq-envars), so here 0001 runs at UTC-6.
+    with ExitStack() as stack:
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setenv("PGTZ", "America/Mexico_City")
+            database = stack.enter_context(database_at(MIGRATIONS_DIR))
+            with psycopg.connect(database.owner_url) as conn:
+                zone = conn.execute("SELECT current_setting('TimeZone')").fetchone()
+            assert zone == ("America/Mexico_City",)
+        db = stack.enter_context(database_at_url(database.owner_url))
+        business = create_business(db)
+        with db.tenant(context(business.id)) as conn:
+            for paid_at in (PAID_AT_FIRST, PAID_AT_LAST):
+                add_event(conn, business.id, paid_at=paid_at)
+        for paid_at in (PAID_AT_BEFORE, PAID_AT_AFTER):
+            with (
+                violates(errors.CheckViolation, "payment_events_paid_at_check"),
+                db.tenant(context(business.id)) as conn,
+            ):
+                add_event(conn, business.id, paid_at=paid_at)
 
 
 # Each field of the projection keeps its documented type and shape, so an allowed key cannot
