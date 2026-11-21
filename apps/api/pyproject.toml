@@ -49,3 +49,9 @@ strict = true
 python_version = "3.13"
 mypy_path = "src"
 plugins = ["pydantic.mypy"]
+
+# Supply-chain cooldown: uv ignores releases younger than 7 days, so a hijacked release is not
+# picked up the day it appears. The lock records the span (`exclude-newer-span = "P7D"`) and is
+# not re-resolved as time passes. See "Dependencies" in AGENTS.md to upgrade or to exempt a package.
+[tool.uv]
+exclude-newer = "7 days"
