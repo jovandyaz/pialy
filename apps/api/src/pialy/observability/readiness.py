@@ -28,8 +28,10 @@ def is_current(current: str | None, head: str | None) -> bool:
 def database_readiness(database: Database, migrations_dir: Path) -> ReadinessCheck:
     """A check that runs SELECT 1 on the pool and compares `alembic_version` with the head.
 
-    It reads `alembic_version` as the service role, which needs SELECT on that table.
+    The head is the code's, read once here (it imports every revision), not on each probe.
+    The check reads `alembic_version` as the service role, which needs SELECT on that table.
     """
+    head = migrations_head(migrations_dir)
 
     def check() -> bool:
         with database.system(timeout=POOL_WAIT_SECONDS) as connection:
@@ -37,6 +39,6 @@ def database_readiness(database: Database, migrations_dir: Path) -> ReadinessChe
             if connection.execute("SELECT to_regclass('alembic_version')").fetchone() == (None,):
                 return False
             row = connection.execute("SELECT version_num FROM alembic_version").fetchone()
-        return is_current(row[0] if row else None, migrations_head(migrations_dir))
+        return is_current(row[0] if row else None, head)
 
     return check

@@ -9,11 +9,13 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 
 from pialy.clock import system_clock
 from pialy.config import Settings
 from pialy.main import create_app
+from pialy.observability import readiness
 from tests.db.support import MIGRATIONS_DIR, AppUrlFactory, ThrowawayDatabaseFactory
 
 PHONE = "5512345678"
@@ -86,6 +88,26 @@ def test_readyz_is_503_when_the_code_is_ahead_of_the_database(
     add_revision(ahead, "r0002", "r0001")
     with client_for(monkeypatch, app_url, ahead) as client:
         assert client.get("/readyz").status_code == 503
+
+
+def test_readyz_reads_the_migrations_once_not_per_probe(
+    at_head: tuple[str, Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The code's head cannot change while it runs, so probes compare against the one read at
+    # startup instead of importing every revision again.
+    reads: list[Path] = []
+
+    class CountingScriptDirectory(ScriptDirectory):
+        def get_heads(self, consider_depends_on: bool = False) -> list[str]:
+            reads.append(Path(self.dir))
+            return super().get_heads(consider_depends_on)
+
+    monkeypatch.setattr(readiness, "ScriptDirectory", CountingScriptDirectory)
+    app_url, migrations = at_head
+    with client_for(monkeypatch, app_url, migrations) as client:
+        statuses = [client.get("/readyz").status_code for _ in range(3)]
+    assert statuses == [200, 200, 200]
+    assert reads == [migrations]
 
 
 def test_migrations_run_with_lock_and_statement_timeouts(
