@@ -84,6 +84,44 @@ WHERE id = %s
 RETURNING next_booking_number - 1
 """
 
+# How apply_payment records the refund flag of an orphan payment (Task 11): one per provider event.
+INSERT_ORPHAN_FLAG = """
+INSERT INTO flags (business_id, kind, provider_event_id, payload)
+VALUES (%s, 'unmatched_payment', %s, '{}')
+ON CONFLICT (business_id, provider_event_id) WHERE kind = 'unmatched_payment' DO NOTHING
+"""
+
+# The only form of a pey payment payload that payment_events.raw holds (built by Tasks 9 and 11):
+# pey's own names for the fields a PeyPaymentEvent reads, attemptId lifted out of
+# metadata.externalMetadata, and the payer's account masked to its last 4 characters.
+SANITIZED_METADATA = {
+    "clabe": MASKED_CLABE,
+    "bankCode": 40012,
+    "trackingKey": "0192191042",
+    "attemptId": "att-0001",
+}
+SANITIZED_PUSH = {
+    "transactionId": "01TESTTRANSACTION00000001",
+    "amount": 0.01,
+    "datePaid": 1790724758,
+    "metadata": SANITIZED_METADATA,
+}
+SANITIZED_QR = SANITIZED_PUSH | {"codiQrId": "35a13c183a"}
+# What pey sends that the projection leaves out (synthetic values).
+PEY_BODY = SANITIZED_QR | {
+    "type": "codi.qr.payment_received",
+    "apiKeyId": "01TESTAPIKEY00000000000001",
+    "bankAccountId": "01TESTBANKACCOUNT000000001",
+    "concept": "Reserva",
+    "numRef": "1",
+    "metadata": SANITIZED_METADATA
+    | {
+        "accountType": 40,
+        "description": "Reserva",
+        "externalMetadata": {"attemptId": "att-0001", "orderId": "12345"},
+    },
+}
+
 SCHEMA = """
 SELECT 'column ' || table_name || '.' || column_name || ' ' || data_type || ' '
        || is_nullable || ' ' || coalesce(column_default, '')
@@ -689,7 +727,10 @@ UNIQUE_PER_BUSINESS: list[tuple[str, KeyAdder]] = [
         "payment_events_provider_event_id_key",
         lambda conn, b, v: add_event(conn, b.id, provider_event_id=v),
     ),
-    ("flags_provider_event_id_key", lambda conn, b, v: add_flag(conn, b.id, provider_event_id=v)),
+    (
+        "flags_one_unmatched_per_event_idx",
+        lambda conn, b, v: add_flag(conn, b.id, provider_event_id=v),
+    ),
     ("idempotency_keys_pkey", lambda conn, b, v: add_idempotency_key(conn, b.id, v)),
 ]
 
@@ -772,6 +813,90 @@ def test_a_payment_event_matches_an_attempt_of_its_own_intent_or_none(owner_db: 
             owner_db.tenant(context(business.id)) as conn,
         ):
             add_event(conn, business.id, **half_match)
+
+
+def test_one_payment_event_may_raise_several_flags(owner_db: Database) -> None:
+    # A late excess payment for a taken slot is refunded twice over (payments-core `excess`, then
+    # the booking reaction), and a `duplicate` refund flag may meet a booking reaction's flag.
+    business = create_business(owner_db)
+    with owner_db.tenant(context(business.id)) as conn:
+        for kind in ("refund_due", "refund_due", "amount_mismatch", "unmatched_payment"):
+            add_flag(conn, business.id, kind=kind, provider_event_id="tx1")
+
+
+def test_an_orphan_payment_raises_one_unmatched_flag(owner_db: Database) -> None:
+    business = create_business(owner_db)
+    with owner_db.tenant(context(business.id)) as conn:
+        for _ in range(2):
+            conn.execute(INSERT_ORPHAN_FLAG, (business.id, "tx1"))
+        row = conn.execute("SELECT count(*) FROM flags WHERE provider_event_id = 'tx1'").fetchone()
+        assert row == (1,)
+    with (
+        violates(errors.UniqueViolation, "flags_one_unmatched_per_event_idx"),
+        owner_db.tenant(context(business.id)) as conn,
+    ):
+        add_flag(conn, business.id, kind="unmatched_payment", provider_event_id="tx1")
+
+
+def test_bookings_are_found_by_their_intent(owner_db: Database) -> None:
+    # Applying a payment reacts on the booking of the intent it paid.
+    with owner_db.system() as conn:
+        rows = conn.execute(
+            """
+            SELECT array_agg(a.attname::text ORDER BY k.position)
+            FROM pg_index i
+            CROSS JOIN LATERAL unnest(i.indkey::int2[]) WITH ORDINALITY AS k(attnum, position)
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+            WHERE i.indrelid = 'bookings'::regclass
+            GROUP BY i.indexrelid
+            """
+        ).fetchall()
+    assert ["business_id", "intent_id"] in [columns[:2] for (columns,) in rows]
+
+
+# --- payment_events.raw: a sanitized projection, never pey's body as received ---
+
+
+@pytest.mark.parametrize("raw", [SANITIZED_PUSH, SANITIZED_QR, {}], ids=["push", "qr", "empty"])
+def test_payment_events_store_the_sanitized_projection(
+    owner_db: Database, raw: dict[str, object]
+) -> None:
+    business = create_business(owner_db)
+    with owner_db.tenant(context(business.id)) as conn:
+        add_event(conn, business.id, raw=Jsonb(raw))
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        SANITIZED_PUSH | {"payerPhone": "5512345678"},
+        SANITIZED_PUSH | {"metadata": SANITIZED_METADATA | {"account": CLABE}},
+        PEY_BODY,
+        SANITIZED_PUSH
+        | {"metadata": SANITIZED_METADATA | {"trackingKey": {"phone": "5512345678"}}},
+        SANITIZED_PUSH | {"transactionId": ["5512345678"]},
+        SANITIZED_PUSH | {"metadata": [CLABE]},
+        "5512345678",
+    ],
+    ids=[
+        "phone-key",
+        "clabe-key-in-metadata",
+        "pey-body",
+        "object-under-allowed-key",
+        "array-under-allowed-key",
+        "metadata-not-an-object",
+        "not-an-object",
+    ],
+)
+def test_payment_events_reject_fields_outside_the_projection(
+    owner_db: Database, raw: object
+) -> None:
+    business = create_business(owner_db)
+    with (
+        violates(errors.CheckViolation, "payment_events_raw_check"),
+        owner_db.tenant(context(business.id)) as conn,
+    ):
+        add_event(conn, business.id, raw=Jsonb(raw))
 
 
 # --- money: integer minor units, ISO 4217 currency, payments-core invariants ---
@@ -865,6 +990,29 @@ def test_the_principal_of_an_intent_is_its_business(owner_db: Database) -> None:
         owner_db.tenant(context(business.id)) as conn,
     ):
         add_intent(conn, business.id, principal_id=other.id)
+
+
+def test_attempts_take_their_creation_time_from_the_domain(owner_db: Database) -> None:
+    # Attempt.created_at comes from the injected Clock and expires_at is checked against it, so
+    # the repository persists it and the database supplies no default of its own.
+    business = create_business(owner_db)
+    later = datetime.now(UTC) + timedelta(days=1)
+    with (
+        pytest.raises(errors.NotNullViolation) as caught,
+        owner_db.tenant(context(business.id)) as conn,
+    ):
+        insert(
+            conn,
+            "payment_attempts",
+            {
+                "business_id": business.id,
+                "id": uuid4(),
+                "intent_id": business.intent_id,
+                "rail": "codi_push",
+                "expires_at": later,
+            },
+        )
+    assert caught.value.diag.column_name == "created_at"
 
 
 def test_attempts_have_a_positive_or_open_amount_and_expire_after_creation(

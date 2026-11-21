@@ -13,8 +13,9 @@ Rules the tables follow (tests/db/test_schema.py checks each one):
   payments-core invariants: amounts are positive, `paid_total_minor` never exceeds the amount and
   agrees with the status.
 - Personal data is stored as hashes and last digits only: the phone as an HMAC-SHA256 hex digest
-  and its last 4 digits, session and invitation tokens as SHA-256 digests, the payer's account in
-  a raw webhook masked to its last 4 characters.
+  and its last 4 digits, session and invitation tokens as SHA-256 digests. Of pey's payment
+  payload only an allowlisted projection is kept, the payer's account masked to its last 4
+  characters.
 - Text columns are `text` with a CHECK, never `char(n)` (wiki.postgresql.org, "Don't Do This").
 - Constraints are NOT DEFERRABLE (the default), as `INSERT ... ON CONFLICT` arbiters must be.
 
@@ -31,6 +32,9 @@ branch_labels = None
 depends_on = None
 
 CURRENCY = r"~ '^[A-Z]{3}$'"
+# A member of a JSON object that is itself an object or an array. Strict mode, since lax mode
+# would unwrap an array and test its elements instead.
+NESTED = 'strict $.* ? (@.type() == "object" || @.type() == "array")'
 
 STATEMENTS = (
     # Trusted since PostgreSQL 13, so the database owner may create it without a superuser.
@@ -108,7 +112,8 @@ STATEMENTS = (
     """,
     # payments-core Attempt. Its amount is in the intent's currency (a payments-core invariant),
     # so it has no currency of its own; NULL means the payer sets it (open QR). failed_at feeds
-    # the API's `failed`, which payments-core has no status for.
+    # the API's `failed`, which payments-core has no status for. created_at is the Attempt's, from
+    # the injected Clock (expires_at is checked against it), so the database supplies no default.
     """
     CREATE TABLE payment_attempts (
         business_id  uuid        NOT NULL
@@ -125,7 +130,7 @@ STATEMENTS = (
             CONSTRAINT payment_attempts_status_check
                 CHECK (status IN ('requested', 'ambiguous', 'paid', 'expired')),
         failed_at    timestamptz,
-        created_at   timestamptz NOT NULL DEFAULT now(),
+        created_at   timestamptz NOT NULL,
         expires_at   timestamptz NOT NULL,
         CONSTRAINT payment_attempts_pkey PRIMARY KEY (business_id, id),
         CONSTRAINT payment_attempts_intent_fkey FOREIGN KEY (business_id, intent_id)
@@ -187,6 +192,8 @@ STATEMENTS = (
     CREATE INDEX bookings_holding_expiry_idx
         ON bookings (business_id, hold_expires_at) WHERE status = 'holding'
     """,
+    # Applying a payment reacts on the booking of the intent it paid.
+    "CREATE INDEX bookings_intent_idx ON bookings (business_id, intent_id)",
     # A payment pey reported: matched to an attempt of its intent, or an orphan (neither).
     rf"""
     CREATE TABLE payment_events (
@@ -211,7 +218,24 @@ STATEMENTS = (
         CONSTRAINT payment_events_attempt_fkey FOREIGN KEY (business_id, intent_id, attempt_id)
             REFERENCES payment_attempts (business_id, intent_id, id),
         -- metadata.clabe is the payer's account (or phone): only its last 4 characters stay.
-        CONSTRAINT payment_events_clabe_check CHECK (raw #>> '{{metadata,clabe}}' ~ '^\**.{{0,4}}$')
+        CONSTRAINT payment_events_clabe_check
+            CHECK (raw #>> '{{metadata,clabe}}' ~ '^\**.{{0,4}}$'),
+        -- raw is a projection of pey's payload, never the body as received: the fields a
+        -- PeyPaymentEvent reads, under pey's names (attemptId lifted out of externalMetadata),
+        -- each a scalar but metadata. CASE orders the tests, as deleting keys from a non-object
+        -- raises instead of returning false.
+        CONSTRAINT payment_events_raw_check CHECK (
+            CASE
+                WHEN jsonb_typeof(raw) <> 'object'
+                    OR jsonb_typeof(coalesce(raw -> 'metadata', '{{}}')) <> 'object' THEN false
+                ELSE (raw - ARRAY['transactionId', 'codiQrId', 'amount', 'datePaid', 'metadata'])
+                        = '{{}}'
+                    AND (coalesce(raw -> 'metadata', '{{}}')
+                        - ARRAY['clabe', 'bankCode', 'trackingKey', 'attemptId']) = '{{}}'
+                    AND NOT jsonb_path_exists(raw - 'metadata', '{NESTED}')
+                    AND NOT jsonb_path_exists(coalesce(raw -> 'metadata', '{{}}'), '{NESTED}')
+            END
+        )
     )
     """,
     "CREATE INDEX payment_events_intent_idx ON payment_events (business_id, intent_id)",
@@ -283,7 +307,6 @@ STATEMENTS = (
     CREATE INDEX outbox_unpublished_idx
         ON outbox (business_id, seq) WHERE published_at IS NULL
     """,
-    # provider_event_id deduplicates the refund flags of orphan payments, which have no intent.
     """
     CREATE TABLE flags (
         business_id       uuid        NOT NULL
@@ -300,9 +323,15 @@ STATEMENTS = (
         created_at        timestamptz NOT NULL DEFAULT now(),
         CONSTRAINT flags_pkey PRIMARY KEY (business_id, id),
         CONSTRAINT flags_booking_fkey FOREIGN KEY (business_id, booking_id)
-            REFERENCES bookings (business_id, id),
-        CONSTRAINT flags_provider_event_id_key UNIQUE (business_id, provider_event_id)
+            REFERENCES bookings (business_id, id)
     )
+    """,
+    # An orphan payment has no intent to remember its event by, so its refund flag is
+    # deduplicated by provider_event_id. A matched payment may raise several flags of the other
+    # kinds (an excess refund, then a refund for a slot taken meanwhile).
+    """
+    CREATE UNIQUE INDEX flags_one_unmatched_per_event_idx
+        ON flags (business_id, provider_event_id) WHERE kind = 'unmatched_payment'
     """,
     """
     CREATE TABLE users (
