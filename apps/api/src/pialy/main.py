@@ -17,7 +17,11 @@ def create_app(
     app = FastAPI(title="pialy", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
     app.state.clock = clock
-    check = readiness or database_readiness(settings.database_url.get_secret_value())
+    check = (
+        readiness
+        if readiness is not None
+        else database_readiness(settings.database_url.get_secret_value())
+    )
     install_problem_handlers(app)
     app.include_router(health_router(check))
     # The last one added is the outermost: security headers wrap the request context.

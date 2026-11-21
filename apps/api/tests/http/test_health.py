@@ -77,6 +77,18 @@ def test_readyz_is_200_with_a_passing_check(monkeypatch: pytest.MonkeyPatch) -> 
     assert response.json() == {"status": "ready"}
 
 
+def test_a_falsy_readiness_check_is_still_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FalsyCheck:
+        def __bool__(self) -> bool:
+            return False
+
+        def __call__(self) -> bool:
+            return True
+
+    with TestClient(make_app(monkeypatch, readiness=FalsyCheck())) as test_client:
+        assert test_client.get("/readyz").status_code == 200
+
+
 def test_readyz_is_503_when_the_check_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     def failing() -> bool:
         raise OSError("down")
