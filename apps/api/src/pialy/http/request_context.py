@@ -15,7 +15,6 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from pialy.http.problems import problem_response
 from pialy.observability.logging import (
     bind_route,
-    redact,
     request_id,
     start_request_context,
 )
@@ -28,9 +27,12 @@ logger = logging.getLogger("pialy.http")
 
 
 def route_of(scope: Scope) -> str:
-    """The route template once routed (`/api/bookings/{token}`), else the redacted raw path."""
+    """The route template once routed (`/api/bookings/{token}`), else the raw path.
+
+    Only for log lines: the JSON formatter redacts it, like every other logged value.
+    """
     path = getattr(scope.get("route"), "path", None)
-    return path if isinstance(path, str) else redact(str(scope["path"]))
+    return path if isinstance(path, str) else str(scope["path"])
 
 
 def _is_canonical_uuid(value: str) -> bool:
