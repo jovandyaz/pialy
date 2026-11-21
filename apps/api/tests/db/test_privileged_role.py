@@ -2,17 +2,18 @@
 
 import logging
 from collections.abc import Iterator
+from typing import NoReturn
 from uuid import uuid4
 
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from psycopg import sql
+from psycopg import errors, sql
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import PoolTimeout
 
 from pialy.clock import system_clock
-from pialy.db.database import Database, PrivilegedRoleError
+from pialy.db.database import Database, PrivilegedRoleError, _refuse_privileged_role
 from pialy.main import create_app
 from tests.db.support import ThrowawayDatabase, app_settings
 
@@ -73,3 +74,22 @@ def test_the_pools_serve_no_connection_of_a_privileged_role(
         database.close()
     assert "superuser or has BYPASSRLS" in caplog.text
     assert PASSWORD_MARKER not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "failure", [errors.QueryCanceled("canceled by the test"), KeyboardInterrupt()]
+)
+def test_a_check_that_fails_closes_its_connection(
+    migrated_database: ThrowawayDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+    failure: BaseException,
+) -> None:
+    # The pool does not close a connection its configure function raises on, so the check does.
+    def fail(*_: object, **__: object) -> NoReturn:
+        raise failure
+
+    with psycopg.connect(migrated_database.app_url) as connection:
+        monkeypatch.setattr(connection, "execute", fail)
+        with pytest.raises(type(failure)):
+            _refuse_privileged_role(connection)
+        assert connection.closed

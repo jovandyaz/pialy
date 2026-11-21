@@ -65,13 +65,17 @@ class PrivilegedRoleError(RuntimeError):
 def _refuse_privileged_role(connection: PgConnection) -> None:
     """Close `connection` and raise PrivilegedRoleError unless RLS binds its role.
 
-    Also each pool's `configure`: a connection it raises on is never added to the pool.
+    Also each pool's `configure`: a connection it raises on is never added to the pool, and
+    the pool does not close it, so this closes it on any failure, the query's own included.
     """
-    with connection.transaction():
-        row = connection.execute(PRIVILEGED_ROLE).fetchone()
-    if row != (False,):
+    try:
+        with connection.transaction():
+            row = connection.execute(PRIVILEGED_ROLE).fetchone()
+        if row != (False,):
+            raise PrivilegedRoleError
+    except BaseException:
         connection.close()
-        raise PrivilegedRoleError
+        raise
 
 
 def _with_session_limits(conninfo: str) -> str:
