@@ -24,12 +24,16 @@ from alembic import command
 from psycopg import errors, sql
 from psycopg.types.json import Jsonb
 from psycopg.types.range import Range
-from pydantic import SecretStr
 
-from pialy.config import Settings
 from pialy.db.database import Database, PgConnection
 from pialy.tenancy.context import OwnerActor, TenantContext
-from tests.db.support import MIGRATIONS_DIR, RunAlembic, ThrowawayDatabase, ThrowawayDatabaseFactory
+from tests.db.support import (
+    MIGRATIONS_DIR,
+    RunAlembic,
+    ThrowawayDatabase,
+    ThrowawayDatabaseFactory,
+    database_at_url,
+)
 
 T0 = datetime(2026, 11, 20, 15, 0, tzinfo=UTC)
 SALT = b"schema-tests-only-salt"
@@ -1478,16 +1482,6 @@ def row_counts(db: Database, business_id: UUID) -> dict[str, int]:
     return counts
 
 
-@contextmanager
-def owner_database(owner_url: str) -> Iterator[Database]:
-    database = Database(Settings(env="test", database_url=SecretStr(owner_url)))
-    database.open(wait=True)
-    try:
-        yield database
-    finally:
-        database.close()
-
-
 @pytest.fixture(scope="module")
 def fresh_owner_url(database_at: ThrowawayDatabaseFactory) -> Iterator[str]:
     """A database of this module's own at head, so upgrading it again touches no other test."""
@@ -1498,7 +1492,7 @@ def fresh_owner_url(database_at: ThrowawayDatabaseFactory) -> Iterator[str]:
 def test_upgrading_again_is_a_no_op_that_keeps_the_data(
     fresh_owner_url: str, alembic_as_owner: RunAlembic
 ) -> None:
-    with owner_database(fresh_owner_url) as database:
+    with database_at_url(fresh_owner_url) as database:
         business_id = seed_every_table(database)
         counts = row_counts(database, business_id)
         with database.system() as conn:
@@ -1512,7 +1506,7 @@ def test_upgrading_again_is_a_no_op_that_keeps_the_data(
 
 
 def test_downgrading_is_refused(fresh_owner_url: str, alembic_as_owner: RunAlembic) -> None:
-    with owner_database(fresh_owner_url) as database:
+    with database_at_url(fresh_owner_url) as database:
         with database.system() as conn:
             before = schema(conn)
         with pytest.raises(NotImplementedError, match="forward-only"):

@@ -25,9 +25,7 @@ from alembic import command
 from alembic.config import Config
 from psycopg import sql
 from psycopg.conninfo import conninfo_to_dict, make_conninfo
-from pydantic import SecretStr
 
-from pialy.config import Settings
 from pialy.db.database import Database
 from tests.db.support import (
     MIGRATIONS_DIR,
@@ -36,6 +34,7 @@ from tests.db.support import (
     RunAlembic,
     ThrowawayDatabase,
     ThrowawayDatabaseFactory,
+    database_at_url,
 )
 
 SKIP_REASON = (
@@ -132,10 +131,6 @@ def throwaway_database(admin_url: str, migrations_dir: Path) -> Iterator[Throwaw
             admin.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(name)))
 
 
-def app_settings(app_url: str) -> Settings:
-    return Settings(env="test", database_url=SecretStr(app_url))
-
-
 def _is_on_this_machine(host: str) -> bool:
     if host in ("", "localhost") or host.startswith("/"):  # no host or a path: a Unix socket
         return True
@@ -207,12 +202,8 @@ def migrated_database(admin_url: str) -> Iterator[ThrowawayDatabase]:
 
 @pytest.fixture(scope="session")
 def app_database(migrated_database: ThrowawayDatabase) -> Iterator[Database]:
-    database = Database(app_settings(migrated_database.app_url))
-    database.open(wait=True)
-    try:
+    with database_at_url(migrated_database.app_url) as database:
         yield database
-    finally:
-        database.close()
 
 
 @pytest.fixture
@@ -224,12 +215,8 @@ def db(app_database: Database, migrated_database: ThrowawayDatabase) -> Database
 
 @pytest.fixture(scope="session")
 def owner_database(migrated_database: ThrowawayDatabase) -> Iterator[Database]:
-    database = Database(app_settings(migrated_database.owner_url))
-    database.open(wait=True)
-    try:
+    with database_at_url(migrated_database.owner_url) as database:
         yield database
-    finally:
-        database.close()
 
 
 @pytest.fixture

@@ -1,6 +1,6 @@
 import time
-from collections.abc import Callable, Iterator
-from contextlib import AbstractContextManager, ExitStack, contextmanager
+from collections.abc import Callable
+from contextlib import AbstractContextManager, ExitStack
 from uuid import UUID, uuid4
 
 import psycopg
@@ -8,13 +8,11 @@ import pytest
 from psycopg import errors
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import PoolTimeout
-from pydantic import SecretStr
 
-from pialy.config import Settings
 from pialy.db.database import Database, PgConnection
 from pialy.db.locks import advisory_key
 from pialy.tenancy.context import OwnerActor, TenantContext
-from tests.db.support import ThrowawayDatabase
+from tests.db.support import ThrowawayDatabase, database_at_url
 
 # A transaction-local setting reads as '' (not NULL) on that connection once it has ended,
 # hence nullif, as the policies of Task 5 do.
@@ -114,22 +112,12 @@ def test_lock_connection_settings_do_not_outlive_their_checkout(db: Database) ->
     assert rows == {CLEAN_SESSION}
 
 
-@contextmanager
-def database_for(url: str) -> Iterator[Database]:
-    database = Database(Settings(env="test", database_url=SecretStr(url)))
-    database.open(wait=True)
-    try:
-        yield database
-    finally:
-        database.close()
-
-
 def test_the_time_limits_join_the_startup_options_of_the_url(
-    db: Database, migrated_database: ThrowawayDatabase
+    migrated_database: ThrowawayDatabase,
 ) -> None:
     # The URL's own options stay; the service's limits come after them, so they prevail.
     options = "-c work_mem=8MB -c statement_timeout=1min"
-    with database_for(make_conninfo(migrated_database.app_url, options=options)) as database:
+    with database_at_url(make_conninfo(migrated_database.app_url, options=options)) as database:
         for checkout in (database.system, database.lock_connection):
             with checkout() as connection:
                 limits = connection.execute(TIME_LIMITS).fetchone()

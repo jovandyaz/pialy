@@ -10,13 +10,11 @@ from fastapi.testclient import TestClient
 from psycopg import sql
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import PoolTimeout
-from pydantic import SecretStr
 
 from pialy.clock import system_clock
-from pialy.config import Settings
 from pialy.db.database import Database, PrivilegedRoleError
 from pialy.main import create_app
-from tests.db.support import ThrowawayDatabase
+from tests.db.support import ThrowawayDatabase, app_settings
 
 PASSWORD_MARKER = "privileged-role-marker"
 
@@ -42,12 +40,8 @@ def privileged_url(
             admin.execute(sql.SQL("DROP ROLE {}").format(sql.Identifier(role)))
 
 
-def settings_for(url: str) -> Settings:
-    return Settings(env="test", database_url=SecretStr(url))
-
-
 def test_the_app_refuses_to_start_as_a_privileged_role(privileged_url: str) -> None:
-    app = create_app(settings_for(privileged_url), system_clock)
+    app = create_app(app_settings(privileged_url), system_clock)
     with pytest.raises(PrivilegedRoleError) as refused, TestClient(app):
         pass
     message = str(refused.value)
@@ -57,7 +51,7 @@ def test_the_app_refuses_to_start_as_a_privileged_role(privileged_url: str) -> N
 
 
 def test_the_app_starts_as_pialy_app(migrated_database: ThrowawayDatabase) -> None:
-    app = create_app(settings_for(migrated_database.app_url), system_clock)
+    app = create_app(app_settings(migrated_database.app_url), system_clock)
     with TestClient(app) as client:
         assert client.get("/healthz").status_code == 200
 
@@ -68,7 +62,7 @@ def test_the_pools_serve_no_connection_of_a_privileged_role(
     # Startup checks once; the pools check every connection they open, so a role that is only
     # reachable later (the database was down at startup) is refused all the same.
     caplog.set_level(logging.WARNING, logger="psycopg.pool")
-    database = Database(settings_for(privileged_url))
+    database = Database(app_settings(privileged_url))
     database.open()
     try:
         with pytest.raises(PoolTimeout), database.system(timeout=1):
