@@ -80,4 +80,4 @@ D owns all tasks; A joins Task 5 (bank tests); the user approves every **[user]*
 - [ ] **Step 1 [user]:** move the public domain from the TS service to `pialy-api`; confirm `/readyz`, one real booking, the agenda SSE.
 - [ ] **Step 2:** PR `chore: remove typescript backend` deleting `apps/server`, `packages/payments`, `packages/connector-pey`, the root `railway.json`; README rewritten (architecture, run instructions, tested banks, "Pre-existing components": `agent-toolkit` built 2026-11-15 to 11-20 inside the hackathon period); `AGENTS.md` updated. **[user]** merges.
 - [ ] **Step 3 [user]:** after one day without incidents, delete the TS Railway service and its database (destructive: confirm first, export a final dump).
-- [ ] **Step 4 [user]:** branch protection on `main` with required checks api, contract, web, docker, gitleaks.
+- [ ] **Step 4 [user]:** branch protection on `main` with required checks `ci-ok` and `gitleaks`. When the docker job lands, add it to `ci-ok` (its `needs`, its result and its path-filter flag, if it gets one, in the step's `env`, and a `check docker` line) so it is covered too.

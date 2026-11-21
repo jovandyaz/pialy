@@ -1,0 +1,32 @@
+# Keeps the SHA-pinned actions and the compose images current. Python and JS dependencies are not
+# listed: their lockfiles are audited in CI (pip-audit, pnpm audit).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    # A release gets a week to be found bad before it is proposed.
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ['*']
+    commit-message:
+      prefix: ci
+
+  # Only docker-compose.test.yml is digest-pinned; after a bump, copy its digest into the web
+  # service in .github/workflows/ci.yml. The api service digest there is bumped by hand until
+  # docker-compose.yml is pinned (deploy plan).
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    # A PostgreSQL major version is an upgrade with its own migration, not a dependency bump.
+    ignore:
+      - dependency-name: postgres
+        update-types: ['version-update:semver-major']
+    commit-message:
+      prefix: build
