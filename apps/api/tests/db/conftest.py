@@ -40,6 +40,9 @@ ROLES_LOCK_KEY = 7_400_231  # serializes role setup between test sessions sharin
 DISPOSABLE_OPT_IN = "PIALY_TEST_DB_DISPOSABLE"
 
 type AppDatabaseFactory = Callable[[Path], AbstractContextManager[str]]
+type DatabaseFactory = Callable[[Path], AbstractContextManager[ThrowawayDatabase]]
+type AlembicCommand = Callable[[Config, str], None]
+type RunAlembic = Callable[[str, AlembicCommand, str], None]
 
 
 @dataclass(frozen=True)
@@ -65,13 +68,20 @@ def ensure_roles(admin_url: str) -> None:
             )
 
 
-def migrate(owner_url: str, migrations_dir: Path) -> None:
-    """`alembic upgrade head` as the owner, through migrations/env.py like the deploy does."""
+def run_alembic(
+    owner_url: str, migrations_dir: Path, action: AlembicCommand, revision: str
+) -> None:
+    """An Alembic command as the owner, through migrations/env.py like the deploy does."""
     config = Config()  # no ini file, so env.py leaves the test run's logging alone
     config.set_main_option("script_location", str(migrations_dir))
     with pytest.MonkeyPatch.context() as patch:
         patch.setenv("MIGRATION_DATABASE_URL", owner_url)
-        command.upgrade(config, "head")
+        action(config, revision)
+
+
+def migrate(owner_url: str, migrations_dir: Path) -> None:
+    """`alembic upgrade head` as the owner."""
+    run_alembic(owner_url, migrations_dir, command.upgrade, "head")
 
 
 def grant_version_read(owner_url: str) -> None:
@@ -193,12 +203,53 @@ def db(app_database: Database, migrated_database: ThrowawayDatabase) -> Database
 
 
 @pytest.fixture(scope="session")
-def app_database_at(admin_url: str) -> AppDatabaseFactory:
+def owner_database(migrated_database: ThrowawayDatabase) -> Iterator[Database]:
+    database = Database(app_settings(migrated_database.owner_url))
+    database.open(wait=True)
+    try:
+        yield database
+    finally:
+        database.close()
+
+
+@pytest.fixture
+def owner_db(owner_database: Database, migrated_database: ThrowawayDatabase) -> Database:
+    """The session's Database as pialy_owner, with every table emptied before the test.
+
+    Stand-in for `db` in the schema tests until Task 5's migration grants pialy_app its
+    privileges. Its `tenant(ctx)` transactions set app.business_id exactly as the app's do.
+    """
+    truncate_tables(migrated_database.owner_url)
+    return owner_database
+
+
+@pytest.fixture(scope="session")
+def database_at(admin_url: str) -> DatabaseFactory:
+    """A further throwaway database at head of the given migrations."""
+
+    def factory(migrations_dir: Path) -> AbstractContextManager[ThrowawayDatabase]:
+        return throwaway_database(admin_url, migrations_dir)
+
+    return factory
+
+
+@pytest.fixture(scope="session")
+def app_database_at(database_at: DatabaseFactory) -> AppDatabaseFactory:
     """A further throwaway database at head of the given migrations; yields pialy_app's URL."""
 
     @contextmanager
     def factory(migrations_dir: Path) -> Iterator[str]:
-        with throwaway_database(admin_url, migrations_dir) as database:
+        with database_at(migrations_dir) as database:
             yield database.app_url
 
     return factory
+
+
+@pytest.fixture(scope="session")
+def alembic_as_owner() -> RunAlembic:
+    """Run `action` (an `alembic.command` function) to `revision` on the real migrations."""
+
+    def run(owner_url: str, action: AlembicCommand, revision: str) -> None:
+        run_alembic(owner_url, MIGRATIONS_DIR, action, revision)
+
+    return run

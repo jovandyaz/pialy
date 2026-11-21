@@ -14,6 +14,7 @@ dependencies = [
   "httpx",
   "argon2-cffi",
   "cryptography",
+  "agent-toolkit-audit-log @ git+https://github.com/jovandyaz/agent-toolkit@v0.1.0rc1#subdirectory=packages/audit-log",
 ]
 
 [project.optional-dependencies]
@@ -25,6 +26,10 @@ dev = ["pytest>=8.2", "ruff", "mypy", "import-linter", "pip-audit", "httpx2>=2,<
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+# The agent-toolkit packages are PEP 508 git references pinned to a tag (and to a commit in uv.lock).
+allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/pialy"]

@@ -144,9 +144,9 @@ docker-compose.yml             postgres:16 + fake pey for local
   - Kept invariants: `btree_gist` exclusion on `(resource_id, during)` for active statuses; one `holding` booking per `(business_id, phone_hash)`; `during` non-empty with lower bound = `slot_start`.
   - Agent tables (`chat_sessions`, `mandate_consumption`, `agent_tool_replies`) are created in layer 2's own migration, not here. `audit_events` uses the toolkit's `schema.sql` verbatim, executed by this migration.
 
-- [ ] **Step 1: Failing tests** — port every test of `apps/server/test/schema.test.ts` (overlap 23P01, adjacent ranges, expired frees slot, other resource, one holding per phone 23505 now per business, unknown statuses and flag kinds rejected, unique provider ids, zero amount rejected, empty range, lower bound, 7-digit cap per business, migration idempotent) plus `test_booking_numbers_are_per_business` (two businesses both get number 1) and `test_same_phone_may_hold_in_two_businesses`.
-- [ ] **Step 2–4:** fail, write `0001` as raw SQL via `op.execute`, pass.
-- [ ] **Step 5:** Commit `feat(api): add schema with per-business invariants`.
+- [x] **Step 1: Failing tests** — port every test of `apps/server/test/schema.test.ts` (overlap 23P01, adjacent ranges, expired frees slot, other resource, one holding per phone 23505 now per business, unknown statuses and flag kinds rejected, unique provider ids, zero amount rejected, empty range, lower bound, 7-digit cap per business, migration idempotent) plus `test_booking_numbers_are_per_business` (two businesses both get number 1) and `test_same_phone_may_hold_in_two_businesses`.
+- [x] **Step 2–4:** fail, write `0001` as raw SQL via `op.execute`, pass.
+- [x] **Step 5:** Commit `feat(api): add schema with per-business invariants`.
 
 ### Task 5: Migration 0002 — row-level security and definer functions (B) **[money]**
 

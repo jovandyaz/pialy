@@ -11,6 +11,9 @@ Python 3.13 backend (FastAPI, psycopg, Alembic), managed with uv. Root `AGENTS.m
   a non-loopback host unless `PIALY_TEST_DB_DISPOSABLE=1` (CI jobs running in a container).
 - Migrations: raw SQL Alembic revisions in `migrations/versions`, forward-only, run as the owner
   role from `apps/api`: `MIGRATION_DATABASE_URL=... uv run alembic upgrade head`.
+- Tenant tables: `business_id` leads every key and index, unique keys hold per business, and
+  foreign keys go through `(business_id, id)`. A new tenant table joins `TENANT_TABLES` in
+  `tests/db/test_schema.py`, whose structural tests enforce these rules (see `0001_tables.py`).
 - `pnpm api:dev`: run the server on port 3000.
 
 ## Conventions
