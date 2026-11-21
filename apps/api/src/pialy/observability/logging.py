@@ -53,9 +53,26 @@ _PHONE = re.compile(
 # card) a run is redacted whole, however long, so a number glued to an account cannot shelter part
 # of it. Runs made only of ISO dates are exempt.
 _CHAIN_SEP = r"[\s.,/_-]{1,3}"
-_DIGIT_CHAIN = re.compile(rf"(?<!\d)\d+(?:{_CHAIN_SEP}\d+)*")
+_DIGIT_CHAIN = re.compile(rf"(?<!\d)\+?\d+(?:{_CHAIN_SEP}\d+)*")
 _DATES_ONLY = re.compile(rf"\d{{4}}-\d{{2}}-\d{{2}}(?:{_CHAIN_SEP}\d{{4}}-\d{{2}}-\d{{2}})+")
 MIN_ACCOUNT_DIGITS = 15
+# A chain of exactly 10 digits is also redacted when it looks like a phone in a grouping `_PHONE`
+# does not know (`5512 3456 78`, `5512-345678`, `+52 5512 3456 78`): 2 to 4 groups of 2 or more
+# digits joined only by whitespace, dots or dashes. Not a phone: a date shape (`2026-11-21 01`,
+# `21-11-2026 12`), IPv4 (4 dotted groups) or a decimal (2 dotted groups), an amount (commas,
+# slashes and underscores never join a phone). The price: a phone whose groups happen to read as
+# a valid date (`21 11 3456 78`) is left alone. Only chains of 10 to 14 digits get here, so each
+# check is O(1).
+PHONE_DIGITS = 10
+COUNTRY_CODE_GROUPS = ("52", "521")
+_DIGIT_GROUP = re.compile(r"\d+")
+_NON_DIGITS = re.compile(r"\D+")
+_PHONE_SEPARATOR = re.compile(r"[\s.-]{1,3}")
+_MONTH = r"(?:0[1-9]|1[0-2])"
+_DAY = r"(?:0[1-9]|[12]\d|3[01])"
+_DATE_SHAPE = re.compile(
+    rf"(?<!\d)(?:\d{{4}}[\s.-]{_MONTH}[\s.-]{_DAY}|{_DAY}[\s.-]{_MONTH}[\s.-]\d{{4}})(?!\d)"
+)
 _HEX = "[0-9a-fA-F]"
 # A canonical UUID is an identifier, not a secret: it stays readable in logs.
 _UUID = re.compile(
@@ -68,10 +85,30 @@ def _shorten_token(match: re.Match[str]) -> str:
     return f"{match[1]}{match[2][:LOGGED_TOKEN_CHARS]}…"
 
 
+def _looks_like_phone(chain: str) -> bool:
+    body = chain.lstrip("+")
+    groups = _DIGIT_GROUP.findall(body)
+    separators = _NON_DIGITS.findall(body)  # one between each two groups
+    offset = 0
+    if len(groups) > 2 and groups[0] in COUNTRY_CODE_GROUPS:
+        offset = len(groups[0]) + len(separators[0])
+        groups, separators = groups[1:], separators[1:]
+    return (
+        sum(map(len, groups)) == PHONE_DIGITS
+        and 2 <= len(groups) <= 4
+        and min(map(len, groups)) >= 2
+        and all(_PHONE_SEPARATOR.fullmatch(separator) for separator in separators)
+        and not (set(separators) == {"."} and len(groups) != 3)  # IPv4 or a decimal
+        and not _DATE_SHAPE.search(body, offset)
+    )
+
+
 def _redact_digit_chain(match: re.Match[str]) -> str:
     chain = match[0]
     digits = sum(char.isdecimal() for char in chain)  # what `\d` matches
-    if digits >= MIN_ACCOUNT_DIGITS and not _DATES_ONLY.fullmatch(chain):
+    if digits >= MIN_ACCOUNT_DIGITS:
+        return chain if _DATES_ONLY.fullmatch(chain) else "[digits]"
+    if digits >= PHONE_DIGITS and _looks_like_phone(chain):
         return "[digits]"
     return chain
 

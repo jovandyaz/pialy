@@ -307,6 +307,32 @@ def test_account_and_card_numbers_with_any_common_separator_are_redacted(account
     assert redact(f"{account}!") == "[digits]!"
 
 
+@pytest.mark.parametrize(
+    "phone",
+    [
+        "5512 3456 78",  # 4-4-2
+        "5512-345678",  # 4-6
+        "55 12345678",
+        "551234 5678",
+        "55123 45678",
+        "5512.3456.78",
+        "555 1234567",
+        "55-1234-56-78",  # 1234-56-78 is not a valid date
+        "55 12 3456 78",  # nor is day 55
+        "5512\xa0345678",
+        "5512  3456  78",
+        "5512\t345678",
+        "+52 5512 3456 78",  # country code with a grouping `_PHONE` does not know
+        "52 5512 3456 78",
+        "+521 5512 3456 78",
+        "+52-5512-345678",
+    ],
+)
+def test_ten_digit_phones_in_other_groupings_are_redacted(phone: str) -> None:
+    assert redact(f"call {phone} now") == "call [digits] now"
+    assert redact(f"{phone}, then") == "[digits], then"
+
+
 def test_spaced_account_next_to_a_phone_redacts_both() -> None:
     assert (
         redact("call 55 1234 5678 or pay 0121 8001 2345 6789 12") == "call [digits] or pay [digits]"
@@ -330,6 +356,14 @@ def test_spaced_account_next_to_a_phone_redacts_both() -> None:
         "at 2026-11-21 01:48:00,123 INFO",
         "p50=1234 p95=5678 p99=9012",
         "1,234,567,890,123 bytes",  # 13 digits
+        "p50=1234 p95=5678",
+        "amount 12.345.678,90 paid",  # 10 digits, dots then a decimal comma
+        "ip 192.168.10.12",  # 10 digits in 4 dotted groups
+        "at 21-11-2026 12:00",  # dd-mm-yyyy and an hour: 10 digits
+        "ratio 5512.345678",  # a decimal, 10 digits
+        "bytes 1.234.567.890",  # a group of 1 digit
+        "values 10 20 30 40 50",  # 5 groups
+        "id 1234 5678",  # 8 digits
         "ip 192.168.100.200",
         "version 1.2.3.4.5",
         "build 20261121-0148",
@@ -376,6 +410,10 @@ ADVERSARIAL_INPUTS = {
     "underscore_digits": "1_" * 50_000,
     "mixed_separators_digits": ("1" + " .,") * 25_000,
     "too_wide_separators": "1    " * 20_000,
+    "many_ten_digit_chains": "5512 3456 78 x " * 6_600,
+    "many_prefixed_chains": "+52 5512 3456 78 x " * 5_200,
+    "many_five_group_chains": "12 34 56 78 90 x " * 5_800,
+    "many_date_shaped_chains": "2026-11-21 01 x " * 6_600,
     "date_chain": "2026-11-15 " * 9_000,
     "date_chain_with_tail": "2026-11-15 " * 9_000 + "1",
     "path_prefixes": "/c/" * 33_333,
