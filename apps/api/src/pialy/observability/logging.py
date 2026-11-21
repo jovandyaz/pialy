@@ -28,10 +28,12 @@ LOGGED_TOKEN_CHARS = 4
 # A booking token is a bearer secret for its pass: these paths carry one right after the prefix.
 _TOKEN_IN_PATH = re.compile(r"(/(?:api/bookings|api/verify|c|negocio/verificar)/)([^/?#\s]+)")
 # Unbounded `[\w.+-]+@` rescans the whole run from every start position when no `@` follows:
-# quadratic on the attacker text that reaches the logs (paths, headers). So the quantifiers are
-# bounded by RFC 5321 s4.5.3.1 (local part 64, domain 255) and `_redact_emails` then absorbs the
-# rest of an over-long local part.
-_EMAIL = re.compile(r"[\w.+-]{1,64}@[\w-]{1,255}(?:\.[\w-]{1,255})+")
+# quadratic on the attacker text that reaches the logs (paths, headers). So the local part is
+# bounded by RFC 5321 s4.5.3.1 (64) and `_redact_emails` then absorbs the rest of an over-long one.
+# The domain labels are possessive instead: they cannot backtrack, and a `.` is never a label
+# character, so giving characters back could not help. Each label is read once, and a label over
+# the RFC's 255 characters no longer defeats the pattern and leaves the local part behind.
+_EMAIL = re.compile(r"[\w.+-]{1,64}@[\w-]++(?:\.[\w-]++)+")
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{32,}")
 _DIGITS = re.compile(r"\d{10,}")
 # A 10-digit phone with an optional +52/52 prefix (and the legacy mobile `1` after it), grouped

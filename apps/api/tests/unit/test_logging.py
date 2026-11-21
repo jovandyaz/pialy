@@ -319,6 +319,10 @@ ADVERSARIAL_INPUTS = {
     "one_huge_local_part": "a" * 100_000 + "@x.mx",
     "long_locals_without_domain": ("a" * 70 + "@") * 700,
     "huge_domain_label": "a@" + "d" * 100_000,
+    "huge_domain_label_with_tld": "a@" + "d" * 100_000 + ".mx",
+    "local_64_and_huge_label": "a" * 64 + "@" + "d" * 100_000,
+    "locals_and_long_labels": ("a" * 64 + "@" + "d" * 99) * 600,
+    "dotted_long_labels": "a@" + ("d" * 300 + ".") * 300,
     "dotted_domain": "a@" + "a." * 50_000,
     "digits": "1" * 100_000,
     "spaced_digits": "1 " * 50_000,
@@ -349,8 +353,21 @@ def test_redact_stays_linear_on_adversarial_input(text: str) -> None:
         "a" * 70 + "@x.mx",  # longer than RFC 5321 allows: still redacted whole
         "a.b+" * 60 + "c@x.mx",
         "a" * 5_000 + "@x.mx",
+        "bob@" + "d" * 300 + ".mx",  # a label over 255 characters must not leave `bob` behind
+        "bob@x." + "d" * 5_000 + ".mx",
+        "a" * 70 + "@" + "d" * 300 + ".example.com",
     ],
-    ids=["plain", "local_64", "long_label", "local_70", "local_dotted_243", "local_5000"],
+    ids=[
+        "plain",
+        "local_64",
+        "long_label",
+        "local_70",
+        "local_dotted_243",
+        "local_5000",
+        "label_300",
+        "second_label_5000",
+        "local_70_label_300",
+    ],
 )
 def test_email_pattern_redacts_valid_and_over_long_addresses(address: str) -> None:
     assert redact(f"mail {address} sent") == "mail [email] sent"
