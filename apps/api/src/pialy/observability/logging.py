@@ -94,11 +94,33 @@ def log_event(name: str, **fields: str | int) -> None:
     _EVENT_LOGGER.info(name, extra={_EVENT_ATTR: name, _FIELDS_ATTR: fields})
 
 
+FORMAT_ERROR_MARKER = " [log format error]"
+
+
+def _message_of(record: logging.LogRecord) -> str:
+    """The formatted message; a broken format call yields the bare template plus a marker.
+
+    The stdlib shields callers from this error inside `Handler.emit` (`handleError`), but a
+    filter runs outside it, so a `logger.info("%d", "abc")` would raise into a request. The
+    fallback leaves the args out: they are what failed to format and may hold personal data.
+    """
+    try:
+        return record.getMessage()
+    except Exception:  # a log call must never break its caller
+        try:
+            return f"{record.msg}{FORMAT_ERROR_MARKER}"
+        except Exception:  # an unprintable `msg`: nothing left to show
+            return f"[unprintable log message]{FORMAT_ERROR_MARKER}"
+
+
 class RedactingFilter(logging.Filter):
-    """Rewrite the record so that nothing downstream can see the unredacted text."""
+    """Rewrite the record so that nothing downstream can see the unredacted text.
+
+    Never raises: a logging call must not fail the code that made it.
+    """
 
     def filter(self, record: logging.LogRecord) -> bool:
-        record.msg = redact(record.getMessage())
+        record.msg = redact(_message_of(record))
         record.args = None
         if record.exc_info:
             record.exc_text = logging.Formatter().formatException(record.exc_info)

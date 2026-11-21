@@ -203,6 +203,44 @@ def test_phone_next_to_a_uuid_is_redacted_and_the_uuid_kept() -> None:
     assert redact(f"{UUID} called 55 1234 5678") == f"{UUID} called [digits]"
 
 
+def test_a_bad_format_call_never_raises_into_the_caller(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configure_logging("INFO")
+    logger = logging.getLogger("x")
+    logger.info("bad %d", "abc")  # TypeError in msg % args
+    logger.info("few %s %s", "one")  # not enough arguments
+    logger.info("%(missing)s", {"other": 1})  # KeyError
+    first, second, third = lines(capsys)
+    assert first["message"] == "bad %d [log format error]"
+    assert second["message"] == "few %s %s [log format error]"
+    assert third["message"] == "%(missing)s [log format error]"
+    assert first["level"] == "INFO"
+
+
+def test_the_format_error_fallback_drops_args_and_redacts_the_message(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    configure_logging("INFO")
+    logging.getLogger("x").info(f"mail {EMAIL} %d", PHONE)  # args never reach the output
+    [line] = lines(capsys)
+    assert line["message"] == "mail [email] %d [log format error]"
+    assert PHONE not in json.dumps(line)
+
+
+def test_an_unprintable_message_never_raises_into_the_caller(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class Unprintable:
+        def __str__(self) -> str:
+            raise RuntimeError("no text for you")
+
+    configure_logging("INFO")
+    logging.getLogger("x").info(Unprintable())
+    [line] = lines(capsys)
+    assert line["message"] == "[unprintable log message] [log format error]"
+
+
 def test_business_id_is_empty_until_bound(capsys: pytest.CaptureFixture[str]) -> None:
     configure_logging("INFO")
     start_request_context()
