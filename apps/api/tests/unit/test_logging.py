@@ -315,6 +315,10 @@ ADVERSARIAL_INPUTS = {
     "dashed": "a-" * 50_000,
     "plus": "a+" * 50_000,
     "ats": "a@" * 50_000,
+    "long_local_parts": ("a" * 70 + "@x.mx ") * 1_400,
+    "one_huge_local_part": "a" * 100_000 + "@x.mx",
+    "long_locals_without_domain": ("a" * 70 + "@") * 700,
+    "huge_domain_label": "a@" + "d" * 100_000,
     "dotted_domain": "a@" + "a." * 50_000,
     "digits": "1" * 100_000,
     "spaced_digits": "1 " * 50_000,
@@ -337,10 +341,35 @@ def test_redact_stays_linear_on_adversarial_input(text: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "address", ["a.b+c@x.mx", "a" * 64 + "@x.mx", "x@" + "d" * 63 + ".example.com"]
+    "address",
+    [
+        "a.b+c@x.mx",
+        "a" * 64 + "@x.mx",
+        "x@" + "d" * 63 + ".example.com",
+        "a" * 70 + "@x.mx",  # longer than RFC 5321 allows: still redacted whole
+        "a.b+" * 60 + "c@x.mx",
+        "a" * 5_000 + "@x.mx",
+    ],
+    ids=["plain", "local_64", "long_label", "local_70", "local_dotted_243", "local_5000"],
 )
-def test_bounded_email_pattern_still_redacts_valid_addresses(address: str) -> None:
+def test_email_pattern_redacts_valid_and_over_long_addresses(address: str) -> None:
     assert redact(f"mail {address} sent") == "mail [email] sent"
+    assert redact(f"to={address}") == "to=[email]"
+
+
+def test_over_long_local_part_does_not_swallow_neighbours() -> None:
+    long_address = "a" * 70 + "@x.mx"
+    assert redact(f"{long_address} {long_address}") == "[email] [email]"
+    assert redact(f"a@x.mx,{long_address};b@y.mx") == "[email],[email];[email]"
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["a@b.mx+x@y.mx", "a@b.mx.+x@y.mx", f"a@b.mx+{'c' * 70}@y.mx"],
+)
+def test_addresses_glued_together_are_each_redacted(text: str) -> None:
+    # The second local part starts right where the first domain stops.
+    assert redact(text) == "[email][email]"
 
 
 def test_a_bad_format_call_never_raises_into_the_caller(

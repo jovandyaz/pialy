@@ -27,10 +27,10 @@ _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 LOGGED_TOKEN_CHARS = 4
 # A booking token is a bearer secret for its pass: these paths carry one right after the prefix.
 _TOKEN_IN_PATH = re.compile(r"(/(?:api/bookings|api/verify|c|negocio/verificar)/)([^/?#\s]+)")
-# Quantifiers are bounded by RFC 5321 s4.5.3.1 (local part 64, domain 255). Unbounded `[\w.+-]+@`
-# rescans the whole run from every start position when no `@` follows: quadratic on the attacker
-# text that reaches the logs (paths, headers). A longer local part still has its last 64
-# characters redacted.
+# Unbounded `[\w.+-]+@` rescans the whole run from every start position when no `@` follows:
+# quadratic on the attacker text that reaches the logs (paths, headers). So the quantifiers are
+# bounded by RFC 5321 s4.5.3.1 (local part 64, domain 255) and `_redact_emails` then absorbs the
+# rest of an over-long local part.
 _EMAIL = re.compile(r"[\w.+-]{1,64}@[\w-]{1,255}(?:\.[\w-]{1,255})+")
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{32,}")
 _DIGITS = re.compile(r"\d{10,}")
@@ -72,6 +72,31 @@ def _redact_digit_chain(match: re.Match[str]) -> str:
     return chain
 
 
+def _is_local_part_char(char: str) -> bool:
+    return char.isalnum() or char in "_.+-"  # the same set as `[\w.+-]`
+
+
+def _redact_emails(text: str) -> str:
+    """Replace each address by `[email]`, including the head of a local part over 64 characters.
+
+    The bounded pattern finds the last 64 characters of the local part; the characters before
+    them are absorbed here, walking back over local-part characters but never past the previous
+    match. Those ranges never overlap, so the scan stays linear.
+    """
+    if "@" not in text:
+        return text
+    parts: list[str] = []
+    copied = 0
+    for match in _EMAIL.finditer(text):
+        start = match.start()
+        while start > copied and _is_local_part_char(text[start - 1]):
+            start -= 1
+        parts += (text[copied:start], "[email]")
+        copied = match.end()
+    parts.append(text[copied:])
+    return "".join(parts)
+
+
 def _redact_plain(text: str) -> str:
     text = _TOKEN.sub("[token]", text)
     text = _DIGIT_CHAIN.sub(_redact_digit_chain, text)
@@ -86,7 +111,7 @@ def redact(text: str) -> str:
     UUID inside an address (`user+<uuid>@x.mx`) cannot split it and leave a half behind.
     """
     text = _TOKEN_IN_PATH.sub(_shorten_token, text)
-    text = _EMAIL.sub("[email]", text)
+    text = _redact_emails(text)
     parts = _UUID.split(text)  # odd items are the UUIDs
     return "".join(part if index % 2 else _redact_plain(part) for index, part in enumerate(parts))
 
