@@ -1,8 +1,10 @@
 name: CI
 
+# Required checks: `ci-ok` and `gitleaks`.
 # No workflow-level `paths:`: a workflow skipped that way leaves its required checks pending.
-# The `changes` job decides which jobs a pull request needs, and a job skipped by its `if:`
-# reports success to branch protection.
+# The `changes` job decides which jobs a pull request needs. A job skipped by its `if:` reports
+# success, so `ci-ok` stands in for api, contract and web: it fails unless each one passed or was
+# skipped because `changes` found nothing for it.
 on:
   pull_request:
     # `edited` covers a change of base branch, which changes what the checks must cover.
@@ -11,6 +13,9 @@ on:
     branches: [main]
   # Without it, required checks are never reported for a pull request in a merge queue.
   merge_group:
+  # Weekly, so the audits and the secret scan also catch new advisories on unchanged code.
+  schedule:
+    - cron: '17 6 * * 1'
 
 permissions:
   contents: read
@@ -46,7 +51,7 @@ jobs:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           # A pull request runs the jobs whose inputs it touches; any other event (a push to main,
-          # a merge queue group) runs every job.
+          # a merge queue group, the weekly schedule) runs every job.
           if [ "$EVENT_NAME" = pull_request ]; then
             # --no-renames lists a moved file under both paths, so moving it out still counts.
             # core.quotePath=false prints non-ASCII names as they are; git still quotes names with a
@@ -62,12 +67,13 @@ jobs:
           flag() { if touches "$1"; then echo true; else echo false; fi; }
 
           every_job='^(\.github/workflows/|package\.json$|")'
-          api='^(apps/api/|tests/contract/|infra/postgres/|\.nvmrc$)'
+          # The root .gitignore decides which files ruff (api) and eslint (web) see.
+          api='^(apps/api/|tests/contract/|infra/postgres/|\.nvmrc$|pnpm-workspace\.yaml$|\.gitignore$)'
           # The TS server and its toolchain: the web job tests them and, until the suite targets
           # the Python app, the contract suite runs against them.
           ts_server='^(apps/server/|packages/|pnpm-lock\.yaml$|pnpm-workspace\.yaml$|tsconfig\.base\.json$|\.nvmrc$)'
           # Any JS or TS file, wherever it is, because `pnpm lint` runs `eslint .`.
-          web='^apps/web/|\.[cm]?[jt]sx?$'
+          web='^(apps/web/|\.gitignore$)|\.[cm]?[jt]sx?$'
           {
             echo "api=$(flag "$every_job|$api")"
             echo "web=$(flag "$every_job|$ts_server|$web")"
@@ -155,14 +161,14 @@ jobs:
       - run: pnpm contract:audit
       # The TS server is the backend in production; the Python app does not serve these routes yet.
       # The same pytest run collects the fake pey's own tests (testpaths = ["."]).
+      # Defined once and reused: `runner` is not available in job-level `env`.
       - name: Contract suite against the TS server
-        env:
+        env: &run-dir
           RUN_DIR: ${{ runner.temp }}/contract
         run: pnpm contract:ts
       - name: Server and fake pey logs
         if: failure() || cancelled()
-        env:
-          RUN_DIR: ${{ runner.temp }}/contract
+        env: *run-dir
         run: |
           shopt -s nullglob
           logs=("$RUN_DIR"/*.log)
@@ -178,7 +184,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     services:
-      # Same database as docker-compose.test.yml, which the apps/server tests use.
+      # Same database as docker-compose.test.yml, which the apps/server tests use. That file is the
+      # reference for the image: Dependabot bumps its digest, then copy it here.
       postgres:
         image: postgres:16-alpine@sha256:1d5b02d3a9941fbd52437db4107f8c52d6297dac553ca1e5c299ebb3756b4857 # 16.16
         env:
@@ -207,6 +214,37 @@ jobs:
       - run: pnpm test
       - run: pnpm build
       - run: pnpm audit:prod
+
+  ci-ok:
+    needs: [changes, api, contract, web]
+    # always(), not !cancelled(): a cancelled run must turn this check red, not skip it to green.
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          API: ${{ needs.api.result }}
+          API_FLAG: ${{ needs.changes.outputs.api }}
+          CONTRACT: ${{ needs.contract.result }}
+          CONTRACT_FLAG: ${{ needs.changes.outputs.contract }}
+          WEB: ${{ needs.web.result }}
+          WEB_FLAG: ${{ needs.changes.outputs.web }}
+        run: |
+          status=0
+          check() { # job result flag: passed, or skipped because `changes` said false
+            if [ "$2" = success ] || { [ "$2" = skipped ] && [ "$3" = false ]; }; then
+              echo "$1: $2"
+            else
+              echo "::error::$1: $2 (changes: ${3:-no answer})"
+              status=1
+            fi
+          }
+          check changes "$CHANGES" ''
+          check api "$API" "$API_FLAG"
+          check contract "$CONTRACT" "$CONTRACT_FLAG"
+          check web "$WEB" "$WEB_FLAG"
+          exit "$status"
 
   gitleaks:
     runs-on: ubuntu-24.04

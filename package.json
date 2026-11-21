@@ -17,7 +17,7 @@
     "api:test": "uv run --directory apps/api pytest",
     "api:audit": "uv run --directory apps/api pip-audit",
     "contract:sync": "uv sync --locked --directory tests/contract",
-    "contract:audit": "uv export --locked --directory tests/contract --no-emit-project --no-emit-package agent-toolkit-webhooks --format requirements.txt | uv run --directory apps/api pip-audit --disable-pip -r /dev/stdin",
+    "contract:audit": "tests/contract/audit.sh",
     "contract:ts": "tests/contract/run-ts.sh",
     "api:dev": "uv run --directory apps/api uvicorn pialy.main:app_factory --factory --reload --port 3000",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm api:lint && pnpm api:test"
