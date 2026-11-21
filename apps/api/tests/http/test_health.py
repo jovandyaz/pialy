@@ -2,6 +2,7 @@ import json
 import logging
 import re
 from collections.abc import Callable, Iterator
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
@@ -12,6 +13,7 @@ from pialy.config import Settings
 from pialy.http.problems import ProblemError
 from pialy.main import create_app
 from pialy.observability.logging import bind, configure_logging
+from pialy.observability.readiness import database_readiness
 
 CSP = "default-src 'self'; script-src 'self'; frame-ancestors 'none'; base-uri 'none'"
 UNREACHABLE_DB = "postgresql://u:p@127.0.0.1:1/none"
@@ -63,11 +65,43 @@ def test_healthz_reports_ok(client: TestClient) -> None:
     assert response.json() == {"status": "ok"}
 
 
-def test_readyz_is_503_when_database_is_unreachable(client: TestClient) -> None:
-    response = client.get("/readyz")
+def readiness_failures(capsys: pytest.CaptureFixture[str]) -> list[dict[str, str]]:
+    parsed = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line]
+    return [line for line in parsed if line["message"].startswith("readiness check failed")]
+
+
+def test_readyz_is_503_when_database_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    json_logs: None,
+    migrations_at_head: Path,
+) -> None:
+    # The migrations have a head, so only the unreachable database can make the check fail.
+    readiness = database_readiness(UNREACHABLE_DB, migrations_at_head)
+    configure_logging("INFO")
+    with TestClient(make_app(monkeypatch, readiness=readiness)) as test_client:
+        response = test_client.get("/readyz")
     assert response.status_code == 503
     assert response.headers["content-type"].startswith("application/problem+json")
     assert response.json()["status"] == 503
+    [failure] = readiness_failures(capsys)
+    assert failure["message"] == "readiness check failed: OperationalError"
+
+
+def test_readyz_logs_only_the_error_type_never_the_connection_string(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], json_logs: None
+) -> None:
+    # libpq quotes the connection string, password included, in its parse errors.
+    readiness = database_readiness("postgresql://u:dsn-marker-pw@[bad/db")
+    configure_logging("INFO")
+    with TestClient(make_app(monkeypatch, readiness=readiness)) as test_client:
+        assert test_client.get("/readyz").status_code == 503
+    out = capsys.readouterr().out
+    assert "dsn-marker-pw" not in out
+    [failure] = [json.loads(line) for line in out.splitlines() if "readiness" in line]
+    assert failure["message"] == "readiness check failed: ProgrammingError"
+    assert failure["level"] == "ERROR"
+    assert "exc" not in failure
 
 
 def test_readyz_is_200_with_a_passing_check(monkeypatch: pytest.MonkeyPatch) -> None:

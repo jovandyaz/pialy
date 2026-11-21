@@ -1,5 +1,6 @@
 import logging
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -35,6 +36,18 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setitem(Settings.model_config, "env_file", None)
     yield
+
+
+@pytest.fixture
+def migrations_at_head(tmp_path: Path) -> Path:
+    """An Alembic migrations directory with one revision, `0001`, as its head."""
+    versions = tmp_path / "migrations" / "versions"
+    versions.mkdir(parents=True)
+    versions.joinpath("0001.py").write_text(
+        'revision = "0001"\ndown_revision = None\nbranch_labels = None\ndepends_on = None\n\n'
+        "def upgrade() -> None:\n    pass\n"
+    )
+    return versions.parent
 
 
 @pytest.fixture

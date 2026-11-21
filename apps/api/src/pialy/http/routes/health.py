@@ -21,8 +21,9 @@ def health_router(readiness: ReadinessCheck) -> APIRouter:
     def readyz() -> dict[str, str]:
         try:
             ready = readiness()
-        except Exception:
-            logger.exception("readiness check failed")
+        except Exception as error:
+            # The type only: libpq messages and their traceback quote the connection string.
+            logger.error("readiness check failed: %s", type(error).__name__)
             ready = False
         if not ready:
             raise ProblemError(
