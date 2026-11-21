@@ -34,6 +34,16 @@ _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 # character, so giving characters back could not help. Each label is read once, and a label over
 # the RFC's 255 characters no longer defeats the pattern and leaves the local part behind.
 _EMAIL = re.compile(r"[\w.+-]{1,64}@[\w-]++(?:\.[\w-]++)+")
+# Credentials, redacted before emails: the email rule would read `pass@db.example.com` as an
+# address and leave the user name, and miss `pass@localhost` altogether. The userinfo of a URL
+# (`scheme://user:pass@`, RFC 3986 s3.2.1) is everything after `://` up to the last `@` before the
+# path, query or fragment, so an `@` left unencoded in a password goes too. A libpq keyword value
+# (`password=...`, `password = '...'`; `PGPASSWORD=` and `sslpassword=` as well) goes up to its
+# closing quote, backslash escapes included (an unclosed quote runs to the end), or else up to
+# the next whitespace. Linear: a userinfo scan starts only right after `://` and stops at the next
+# `/`, so scans never overlap, and a quoted value is read possessively.
+_USERINFO = re.compile(r"(?<=://)[^\s/?#]+@")
+_PASSWORD_VALUE = re.compile(r"(password\s*=\s*)(?:'(?:[^'\\]|\\[\s\S])*+'?|\S+)", re.IGNORECASE)
 # Tokens. A run is a maximal stretch of characters from either base64 alphabet, standard (`+ /`
 # and `=` padding) or url-safe (`- _`); hex and plain words are subsets. A run of 32 or more is a
 # key or a token and is redacted whole, unless it reads as a path: `/` is also a base64 character,
@@ -169,17 +179,24 @@ def _redact_emails(text: str) -> str:
     return "".join(parts)
 
 
+def _redact_credentials(text: str) -> str:
+    text = _USERINFO.sub("[userinfo]@", text)
+    return _PASSWORD_VALUE.sub(r"\g<1>[redacted]", text)
+
+
 def _redact_plain(text: str) -> str:
     text = _RUN.sub(_redact_run, text)
     return _DIGIT_CHAIN.sub(_redact_digit_chain, text)
 
 
 def redact(text: str) -> str:
-    """Hide emails, keys and tokens, path tokens and every chain of 10 or more digits.
+    """Hide credentials, emails, keys and tokens, path tokens and chains of 10 or more digits.
 
-    Canonical UUIDs pass through untouched. Emails are redacted first, on the whole text, so a
-    UUID inside an address (`user+<uuid>@x.mx`) cannot split it and leave a half behind.
+    Canonical UUIDs pass through untouched. Credentials, then emails, are redacted first, on the
+    whole text, so a UUID inside an address (`user+<uuid>@x.mx`) cannot split it and leave a half
+    behind.
     """
+    text = _redact_credentials(text)
     text = _redact_emails(text)
     parts = _UUID.split(text)  # odd items are the UUIDs
     return "".join(part if index % 2 else _redact_plain(part) for index, part in enumerate(parts))

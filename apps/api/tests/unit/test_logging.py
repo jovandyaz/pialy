@@ -582,6 +582,77 @@ def test_a_long_segment_of_a_relative_path_is_still_a_token() -> None:
     assert redact(f"{TOKEN}/raw/data") == "[token]/raw/data"
 
 
+DSN_PASSWORD = "s3cret-Pass"  # synthetic
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (
+            f"postgresql://pialy:{DSN_PASSWORD}@localhost/pialy",
+            "postgresql://[userinfo]@localhost/pialy",
+        ),
+        (
+            f"postgresql://pialy:{DSN_PASSWORD}@localhost:5432/pialy?sslmode=disable",
+            "postgresql://[userinfo]@localhost:5432/pialy?sslmode=disable",
+        ),
+        (
+            f"postgresql://pialy:{DSN_PASSWORD}@db.internal.example/pialy",
+            "postgresql://[userinfo]@db.internal.example/pialy",
+        ),
+        (
+            f"postgresql+psycopg://pialy:{DSN_PASSWORD}@db.internal.example",
+            "postgresql+psycopg://[userinfo]@db.internal.example",
+        ),
+        (  # an `@` left unencoded in the password: everything up to the last one goes
+            "postgresql://pialy:pa@ss@localhost/pialy",
+            "postgresql://[userinfo]@localhost/pialy",
+        ),
+        ("postgresql://pialy@localhost/pialy", "postgresql://[userinfo]@localhost/pialy"),
+        (
+            f"bad DSN 'postgresql://pialy:{DSN_PASSWORD}@localhost/pialy' given",
+            "bad DSN 'postgresql://[userinfo]@localhost/pialy' given",
+        ),
+        ("see https://example.invalid/a?mail=a@b.mx", "see https://example.invalid/a?mail=[email]"),
+    ],
+)
+def test_the_userinfo_of_a_url_is_redacted(text: str, expected: str) -> None:
+    assert redact(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        (
+            f"host=localhost password={DSN_PASSWORD} dbname=pialy",
+            "host=localhost password=[redacted] dbname=pialy",
+        ),
+        (
+            f"host=db.internal.example password = {DSN_PASSWORD} dbname=pialy",
+            "host=db.internal.example password = [redacted] dbname=pialy",
+        ),
+        (
+            "host=localhost password = 's3cret pass' dbname=pialy",
+            "host=localhost password = [redacted] dbname=pialy",
+        ),
+        (
+            "host=localhost password='it\\'s a \\\\ secret' dbname=pialy",
+            "host=localhost password=[redacted] dbname=pialy",
+        ),
+        ("password='never closed and more", "password=[redacted]"),  # libpq would reject it
+        (
+            f"postgresql://localhost/pialy?password={DSN_PASSWORD}",
+            "postgresql://localhost/pialy?password=[redacted]",
+        ),
+        (f"PGPASSWORD={DSN_PASSWORD} psql", "PGPASSWORD=[redacted] psql"),
+        (f"sslpassword={DSN_PASSWORD}", "sslpassword=[redacted]"),
+    ],
+)
+def test_a_libpq_password_keyword_value_is_redacted(text: str, expected: str) -> None:
+    assert redact(text) == expected
+    assert DSN_PASSWORD not in redact(text)
+
+
 @pytest.mark.parametrize(
     "address",
     [f"user+{UUID}@x.mx", f"{UUID}@example.com", f"a.{UUID}@x.mx", f"{UUID.upper()}@x.mx"],
@@ -921,6 +992,17 @@ ADVERSARIAL_INPUTS = {
     "mixed_31": ("Ab1" * 10 + "C ") * 3_125,
     "clabe_segments": f"/api/accounts/{CLABE}" * 3_100,
     "file_names": "/app/src/pialy/http/security_headers.py " * 2_500,
+    "dsns": "postgresql://u:p@localhost/db " * 3_400,
+    "scheme_separators": "://" * 33_333,
+    "scheme_without_userinfo": "x://" + "a" * 100_000,
+    "schemes_without_userinfo": ("a://" + "b" * 30) * 2_900,
+    "userinfo_ats": "x://" + "a@" * 50_000,
+    "password_keywords": "password=" * 11_111,
+    "password_then_spaces": "password" + " " * 100_000,
+    "password_words": "password " * 11_111,
+    "unclosed_password_quote": "password='" + "a" * 100_000,
+    "password_quote_backslashes": "password='" + "\\" * 100_000,
+    "password_quotes": "password='" * 10_000,
 }
 
 
