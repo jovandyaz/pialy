@@ -209,6 +209,11 @@ def test_emails_containing_a_uuid_are_redacted_whole(address: str) -> None:
         "555-123-4567",
         "(555) 123-4567",
         "+52 555 123 4567",
+        "+521 55 1234 5678",  # legacy mobile prefix, dropped in 2019 but still written
+        "+52 1 55 1234 5678",
+        "521 55 1234 5678",
+        "+521-55-1234-5678",
+        "+52 1 (55) 1234 5678",
     ],
 )
 def test_phones_with_separators_are_redacted(phone: str) -> None:

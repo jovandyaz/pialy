@@ -34,12 +34,13 @@ _TOKEN_IN_PATH = re.compile(r"(/(?:api/bookings|api/verify|c|negocio/verificar)/
 _EMAIL = re.compile(r"[\w.+-]{1,64}@[\w-]{1,255}(?:\.[\w-]{1,255})+")
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{32,}")
 _DIGITS = re.compile(r"\d{10,}")
-# A 10-digit phone with an optional +52/52 prefix, grouped 2-4-4 or 3-3-4 (area code optionally in
-# parentheses) and separated by single spaces, dots or dashes. Only these shapes, so a date, an
+# A 10-digit phone with an optional +52/52 prefix (and the legacy mobile `1` after it), grouped
+# 2-4-4 or 3-3-4 (area code optionally in parentheses) and separated by single spaces, dots or
+# dashes. Only these shapes, so a date, an
 # ISO timestamp, an IP address or a small number is never taken for a phone.
 _SEP = r"[ .-]?"
 _PHONE = re.compile(
-    rf"(?<!\d)(?:\+?52{_SEP})?"
+    rf"(?<!\d)(?:\+?52{_SEP}(?:1{_SEP})?)?"
     rf"(?:(?:\(\d{{2}}\)|\d{{2}}){_SEP}\d{{4}}{_SEP}\d{{4}}"
     rf"|(?:\(\d{{3}}\)|\d{{3}}){_SEP}\d{{3}}{_SEP}\d{{4}})(?!\d)"
 )
