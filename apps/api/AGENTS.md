@@ -8,7 +8,8 @@ Python 3.13 backend (FastAPI, psycopg, Alembic), managed with uv. Root `AGENTS.m
 - `pnpm api:test`: pytest. Database tests need `docker compose -f docker-compose.test.yml up -d`;
   the script points `TEST_DATABASE_URL` (an admin URL of a disposable cluster: the fixtures reset
   the `pialy_owner`/`pialy_app` passwords) at it unless set. Without it they are skipped. They refuse
-  a non-loopback host unless `PIALY_TEST_DB_DISPOSABLE=1` (CI jobs running in a container).
+  a non-loopback host, in the URL or in `PGHOST`/`PGHOSTADDR`, unless `PIALY_TEST_DB_DISPOSABLE=1`
+  (CI jobs running in a container).
 - Migrations: raw SQL Alembic revisions in `migrations/versions`, forward-only, run as the owner
   role from `apps/api`: `MIGRATION_DATABASE_URL=... uv run alembic upgrade head`.
 - Tenant tables: `business_id` leads every key and index, unique keys hold per business, and

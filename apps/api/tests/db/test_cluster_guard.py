@@ -43,3 +43,51 @@ def test_accepts_a_remote_cluster_marked_disposable(refuse_unless_disposable: Gu
     refuse_unless_disposable(
         "postgresql://postgres:postgres@postgres:5432/pialy_test", {"PIALY_TEST_DB_DISPOSABLE": "1"}
     )
+
+
+LOCAL_URLS = [
+    "postgresql://postgres:postgres@localhost:54329/pialy_test",
+    "dbname=pialy_test user=postgres",  # no host: libpq takes PGHOST, PGHOSTADDR if set
+]
+
+
+@pytest.mark.parametrize("url", LOCAL_URLS)
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        ("PGHOST", "db.example.invalid"),
+        ("PGHOST", "localhost,db.example.invalid"),
+        ("PGHOSTADDR", "10.0.0.7"),  # replaces the address a URL's host would resolve to
+    ],
+)
+def test_refuses_a_libpq_host_variable_pointing_elsewhere(
+    refuse_unless_disposable: Guard, url: str, variable: str, value: str
+) -> None:
+    with pytest.raises(pytest.fail.Exception, match=variable) as failure:
+        refuse_unless_disposable(url, {variable: value})
+    assert "postgres:postgres" not in str(failure.value)
+
+
+@pytest.mark.parametrize(
+    "environ",
+    [
+        {"PGHOST": "localhost"},
+        {"PGHOST": "/var/run/postgresql"},
+        {"PGHOSTADDR": "127.0.0.1"},
+        {"PGHOST": "", "PGHOSTADDR": ""},
+    ],
+)
+def test_accepts_libpq_host_variables_on_this_machine(
+    refuse_unless_disposable: Guard, environ: dict[str, str]
+) -> None:
+    for url in LOCAL_URLS:
+        refuse_unless_disposable(url, environ)
+
+
+def test_a_disposable_cluster_may_be_reached_through_pghost(
+    refuse_unless_disposable: Guard,
+) -> None:
+    refuse_unless_disposable(
+        "dbname=pialy_test user=postgres",
+        {"PGHOST": "postgres", "PIALY_TEST_DB_DISPOSABLE": "1"},
+    )

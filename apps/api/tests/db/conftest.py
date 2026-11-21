@@ -5,9 +5,10 @@ docker-compose.test.yml Postgres. Without it these tests are skipped. The sessio
 throwaway database owned by `pialy_owner`, migrated to head as `pialy_owner`, and served to the
 tests as `pialy_app` (not superuser, not owner, no BYPASSRLS). The database is dropped at the end.
 The two roles are cluster-wide and their passwords are reset to the synthetic ones below, so the
-fixtures refuse (fail, not skip) a cluster that is not on this machine unless
-PIALY_TEST_DB_DISPOSABLE=1 marks it disposable, as for a CI job that reaches its Postgres service
-container by label. Loopback alone cannot tell the test cluster from a local dev one.
+fixtures refuse (fail, not skip) a cluster that is not on this machine, whether the URL or
+PGHOST/PGHOSTADDR names it, unless PIALY_TEST_DB_DISPOSABLE=1 marks it disposable, as for a CI job
+that reaches its Postgres service container by label. Loopback alone cannot tell the test cluster
+from a local dev one.
 """
 
 import ipaddress
@@ -38,6 +39,8 @@ SKIP_REASON = (
 ROLE_PASSWORDS = {"pialy_owner": "pialy-owner-test-only", "pialy_app": "pialy-app-test-only"}
 ROLES_LOCK_KEY = 7_400_231  # serializes role setup between test sessions sharing a cluster
 DISPOSABLE_OPT_IN = "PIALY_TEST_DB_DISPOSABLE"
+# libpq environment variables that choose the server when the URL does not (libpq-envars).
+HOST_VARIABLES = ("PGHOST", "PGHOSTADDR")
 
 type AppDatabaseFactory = Callable[[Path], AbstractContextManager[str]]
 type DatabaseFactory = Callable[[Path], AbstractContextManager[ThrowawayDatabase]]
@@ -144,23 +147,37 @@ def _is_on_this_machine(host: str) -> bool:
         return False
 
 
+def _remote_hosts(hosts: str) -> list[str]:
+    """The entries of a comma-separated host or hostaddr list that are not on this machine."""
+    return sorted(
+        {host.strip() for host in hosts.split(",") if not _is_on_this_machine(host.strip())}
+    )
+
+
 def _refuse_unless_disposable(admin_url: str, environ: Mapping[str, str]) -> None:
-    """Fail unless the cluster is on this machine or explicitly marked disposable."""
+    """Fail unless the cluster is on this machine or explicitly marked disposable.
+
+    libpq reads PGHOST and PGHOSTADDR when the URL leaves host or hostaddr out, and a hostaddr
+    replaces the address that host would resolve to. Either one off this machine is refused even
+    beside an explicit URL host, so no mix of URL and environment can lead the fixtures elsewhere.
+    """
     if environ.get(DISPOSABLE_OPT_IN) == "1":
         return
     params = conninfo_to_dict(admin_url)
-    hosts = [
-        host.strip()
-        for key in ("host", "hostaddr")
-        for host in str(params.get(key) or "").split(",")
+    targets = {
+        "TEST_DATABASE_URL": ",".join(str(params.get(key) or "") for key in ("host", "hostaddr")),
+        **{name: environ.get(name, "") for name in HOST_VARIABLES},
+    }
+    remote = [
+        f"{name} points at {', '.join(hosts)}"
+        for name, value in targets.items()
+        if (hosts := _remote_hosts(value))
     ]
-    remote = sorted({host for host in hosts if not _is_on_this_machine(host)})
     if remote:
         pytest.fail(
-            f"TEST_DATABASE_URL points at {', '.join(remote)}, not at this machine. The db "
-            "fixtures reset the pialy_owner and pialy_app passwords cluster-wide, so they only run "
-            "against localhost, 127.0.0.1 or ::1, or a cluster marked disposable with "
-            f"{DISPOSABLE_OPT_IN}=1.",
+            f"{'; '.join(remote)}: not this machine. The db fixtures reset the pialy_owner and "
+            "pialy_app passwords cluster-wide, so they only run against localhost, 127.0.0.1 or "
+            f"::1, or a cluster marked disposable with {DISPOSABLE_OPT_IN}=1.",
             pytrace=False,
         )
 
