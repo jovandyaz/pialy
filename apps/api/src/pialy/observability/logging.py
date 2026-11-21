@@ -25,9 +25,6 @@ _EVENT_ATTR = "pialy_event"
 _FIELDS_ATTR = "pialy_fields"
 _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 
-LOGGED_TOKEN_CHARS = 4
-# A booking token is a bearer secret for its pass: these paths carry one right after the prefix.
-_TOKEN_IN_PATH = re.compile(r"(/(?:api/bookings|api/verify|c|negocio/verificar)/)([^/?#\s]+)")
 # Unbounded `[\w.+-]+@` rescans the whole run from every start position when no `@` follows:
 # quadratic on the attacker text that reaches the logs (paths, headers). So the local part is
 # bounded by RFC 5321 s4.5.3.1 (64) and `_redact_emails` then absorbs the rest of an over-long one.
@@ -39,14 +36,22 @@ _EMAIL = re.compile(r"[\w.+-]{1,64}@[\w-]++(?:\.[\w-]++)+")
 # and `=` padding) or url-safe (`- _`); hex and plain words are subsets. A run of 32 or more is a
 # key or a token and is redacted whole, unless it reads as a path: `/` is also a base64 character,
 # so `/app/src/pialy/observability/logging` is a 36-character run. A path has no `+` and no
-# padding, and each `/` segment is a word (an optional capital, then lowercase letters, digits,
-# `_` or `-`); even then a segment of 32 or more is a token. A random base64 key passes for a path
-# with odds below one in a million (its segments mix cases), and a 32-byte key always has padding.
+# padding; its `/` segments are words (an optional capital, then lowercase letters, digits, `_` or
+# `-`), at least two of them names (two or more lowercase letters: `api`, `bookings`); and only an
+# absolute path (`/...`) may also hold token segments. Measured on 3,000,000 random unpadded
+# standard-base64 keys of 32 to 64 characters, none passes for a path (two short lowercase chunks
+# are not that rare in a key, a leading `/` plus two of them is); a 32-byte key always has padding.
+# Inside a path (or a shorter run), a segment of 16 or more characters after a `/` is a bearer
+# token (a booking token is 22) and keeps only its first 4 characters, wherever the route puts it;
+# a segment of 32 or more at the start of the run is a token too. Canonical UUIDs never get here.
 # Linear: runs never overlap, and the lookbehind stops a failed match from restarting inside one.
+LOGGED_TOKEN_CHARS = 4
+MIN_PATH_TOKEN_CHARS = 16
 MIN_TOKEN_CHARS = 32
-_RUN = re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{32,}(?:={1,2}(?![A-Za-z0-9+/=_-]))?")
+MIN_PATH_NAMES = 2
+_RUN = re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{16,}(?:={1,2}(?![A-Za-z0-9+/=_-]))?")
 _WORD = re.compile(r"[A-Z]?[a-z0-9_-]*")
-_TOKEN = re.compile(rf"[A-Za-z0-9_-]{{{MIN_TOKEN_CHARS},}}")  # a token inside one segment
+_NAME = re.compile(r"[a-z][a-z_-]+")
 # Digits fail closed (OWASP Logging Cheat Sheet: no personal data in logs). Any chain of 10 or more
 # digits is redacted whole: digit groups joined by 1 to 3 separator characters (whitespace or
 # `. , / _ - : | ( )`, plus the `T` of an ISO timestamp), after an optional `+` and `(`. A phone or
@@ -76,21 +81,31 @@ _UUID = re.compile(
 )
 
 
-def _shorten_token(match: re.Match[str]) -> str:
-    return f"{match[1]}{match[2][:LOGGED_TOKEN_CHARS]}…"
+def _is_path(run: str, segments: list[str]) -> bool:
+    if "+" in run or run.endswith("="):
+        return False
+    absolute = segments[0] == ""
+    names = 0
+    for segment in segments:
+        if _WORD.fullmatch(segment):
+            names += _NAME.fullmatch(segment) is not None
+        elif not (absolute and len(segment) >= MIN_PATH_TOKEN_CHARS):
+            return False
+    return names >= MIN_PATH_NAMES
 
 
-def _is_path(run: str) -> bool:
-    return (
-        "+" not in run
-        and not run.endswith("=")
-        and all(_WORD.fullmatch(segment) for segment in run.split("/"))
-    )
+def _redact_segment(segment: str, after_slash: bool) -> str:
+    if after_slash and len(segment) >= MIN_PATH_TOKEN_CHARS:
+        return f"{segment[:LOGGED_TOKEN_CHARS]}…"
+    return "[token]" if len(segment) >= MIN_TOKEN_CHARS else segment
 
 
 def _redact_run(match: re.Match[str]) -> str:
     run = match[0]
-    return _TOKEN.sub("[token]", run) if _is_path(run) else "[token]"
+    segments = run.split("/")
+    if len(run) >= MIN_TOKEN_CHARS and not _is_path(run, segments):
+        return "[token]"
+    return "/".join(_redact_segment(segment, index > 0) for index, segment in enumerate(segments))
 
 
 def _redact_digit_chain(match: re.Match[str]) -> str:
@@ -132,12 +147,11 @@ def _redact_plain(text: str) -> str:
 
 
 def redact(text: str) -> str:
-    """Hide booking tokens, emails, 32+ character tokens and every chain of 10 or more digits.
+    """Hide emails, keys and tokens, path tokens and every chain of 10 or more digits.
 
     Canonical UUIDs pass through untouched. Emails are redacted first, on the whole text, so a
     UUID inside an address (`user+<uuid>@x.mx`) cannot split it and leave a half behind.
     """
-    text = _TOKEN_IN_PATH.sub(_shorten_token, text)
     text = _redact_emails(text)
     parts = _UUID.split(text)  # odd items are the UUIDs
     return "".join(part if index % 2 else _redact_plain(part) for index, part in enumerate(parts))

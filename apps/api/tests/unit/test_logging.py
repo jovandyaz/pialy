@@ -37,6 +37,7 @@ STANDARD_KEY = synthetic_key("s6", 32)  # 44 characters with `+`, `/` and `=` pa
 PADDED_KEY = synthetic_key("p0", 31)  # 44 characters ending in `==`
 URLSAFE_KEY = synthetic_key("u2", 32, urlsafe=True)  # `-` and `_`
 SLASH_ONLY_KEY = synthetic_key("n0", 48)  # 64 characters, `/` but no `+` and no padding
+SLASH_C_KEY = synthetic_key("c24773", 32)  # contains `/c/`, once taken for a booking path
 
 
 @pytest.fixture(autouse=True)
@@ -97,6 +98,51 @@ def test_truncates_booking_token_in_url_to_4_chars() -> None:
     )
     assert redact(f"GET /c/{BOOKING_TOKEN}?x=1") == "GET /c/Zx9Q…?x=1"
     assert redact("GET /api/slots?date=2026-11-15") == "GET /api/slots?date=2026-11-15"
+
+
+@pytest.mark.parametrize(
+    "path, expected",
+    [
+        (f"/api/verify/{BOOKING_TOKEN}", "/api/verify/Zx9Q…"),
+        (f"/negocio/verificar/{BOOKING_TOKEN}", "/negocio/verificar/Zx9Q…"),
+        (f"/api/b/panaderia/bookings/{BOOKING_TOKEN}", "/api/b/panaderia/bookings/Zx9Q…"),
+        (
+            f"/api/b/panaderia/bookings/{BOOKING_TOKEN}/events",
+            "/api/b/panaderia/bookings/Zx9Q…/events",
+        ),
+        (
+            f"/api/b/panaderia/bookings/{BOOKING_TOKEN}/attempts?x=1",
+            "/api/b/panaderia/bookings/Zx9Q…/attempts?x=1",
+        ),
+        (
+            f"http://testserver/api/b/panaderia/bookings/{BOOKING_TOKEN}#top",
+            "http://testserver/api/b/panaderia/bookings/Zx9Q…#top",
+        ),
+        (f"/api/anywhere/{BOOKING_TOKEN}.", "/api/anywhere/Zx9Q…."),
+        ("/x/abcdefghijklmnop", "/x/abcd…"),  # 16 characters
+        ("/x/abcdefghijklmno", "/x/abcdefghijklmno"),  # 15 characters
+        (f"/api/bookings/{UUID}/events", f"/api/bookings/{UUID}/events"),  # canonical UUID
+        (f"/api/bookings/{UUID}x", "/api/bookings/3f25…"),  # not a canonical UUID
+        ("/api/b/panaderia/slots?date=2026-11-15", "/api/b/panaderia/slots?date=2026-11-15"),
+    ],
+)
+def test_any_path_segment_of_16_or_more_token_characters_is_truncated(
+    path: str, expected: str
+) -> None:
+    assert redact(f"GET {path}") == f"GET {expected}"
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        # 32 characters or more that cannot be told apart from a key: redacted whole.
+        (f"https://pialy.example/c/{BOOKING_TOKEN}", "https://pialy.[token]"),  # not absolute
+        (f"/anywhere/{BOOKING_TOKEN}", "[token]"),  # a single name
+        (f"api/bookings/{BOOKING_TOKEN}", "[token]"),  # relative
+    ],
+)
+def test_a_token_path_that_could_be_a_key_is_redacted_whole(text: str, expected: str) -> None:
+    assert redact(text) == expected
 
 
 def test_every_line_carries_request_id_and_business_id(
@@ -303,12 +349,13 @@ def test_the_synthetic_keys_have_the_shapes_under_test() -> None:
     assert PADDED_KEY.endswith("==")
     assert {"-", "_"} <= set(URLSAFE_KEY)
     assert "/" in SLASH_ONLY_KEY and "+" not in SLASH_ONLY_KEY and "=" not in SLASH_ONLY_KEY
+    assert "/c/" in SLASH_C_KEY
 
 
 @pytest.mark.parametrize(
     "key",
-    [STANDARD_KEY, PADDED_KEY, URLSAFE_KEY, SLASH_ONLY_KEY],
-    ids=["standard_44", "padded", "urlsafe", "slash_only_64"],
+    [STANDARD_KEY, PADDED_KEY, URLSAFE_KEY, SLASH_ONLY_KEY, SLASH_C_KEY],
+    ids=["standard_44", "padded", "urlsafe", "slash_only_64", "slash_c"],
 )
 def test_base64_keys_are_redacted_whole(key: str) -> None:
     assert redact(f"key {key} end") == "key [token] end"
