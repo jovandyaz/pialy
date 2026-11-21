@@ -27,7 +27,11 @@ _UVICORN_LOGGERS = ("uvicorn", "uvicorn.error", "uvicorn.access")
 LOGGED_TOKEN_CHARS = 4
 # A booking token is a bearer secret for its pass: these paths carry one right after the prefix.
 _TOKEN_IN_PATH = re.compile(r"(/(?:api/bookings|api/verify|c|negocio/verificar)/)([^/?#\s]+)")
-_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+# Quantifiers are bounded by RFC 5321 s4.5.3.1 (local part 64, domain 255). Unbounded `[\w.+-]+@`
+# rescans the whole run from every start position when no `@` follows: quadratic on the attacker
+# text that reaches the logs (paths, headers). A longer local part still has its last 64
+# characters redacted.
+_EMAIL = re.compile(r"[\w.+-]{1,64}@[\w-]{1,255}(?:\.[\w-]{1,255})+")
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{32,}")
 _DIGITS = re.compile(r"\d{10,}")
 # A 10-digit phone with an optional +52/52 prefix, grouped 2-4-4 or 3-3-4 (area code optionally in

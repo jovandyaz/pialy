@@ -1,5 +1,6 @@
 import json
 import logging
+import time
 from collections.abc import Iterator
 
 import pytest
@@ -236,6 +237,42 @@ def test_phone_redaction_leaves_ids_timestamps_and_small_numbers(text: str) -> N
 
 def test_phone_next_to_a_uuid_is_redacted_and_the_uuid_kept() -> None:
     assert redact(f"{UUID} called 55 1234 5678") == f"{UUID} called [digits]"
+
+
+# Attacker-controlled text (paths, headers) reaches redact(); each shape is a worst case for one
+# of the patterns. The old unbounded email pattern took ~23 s on 100k characters; a linear pass
+# takes ~30 ms, so the budget leaves wide room for a slow CI machine and still catches a regression.
+REDOS_BUDGET_SECONDS = 1.0
+ADVERSARIAL_INPUTS = {
+    "letters": "a" * 100_000,
+    "dotted": "a." * 50_000,
+    "dashed": "a-" * 50_000,
+    "plus": "a+" * 50_000,
+    "ats": "a@" * 50_000,
+    "dotted_domain": "a@" + "a." * 50_000,
+    "digits": "1" * 100_000,
+    "spaced_digits": "1 " * 50_000,
+    "dashed_digits": "1-" * 50_000,
+    "dotted_digits": "1." * 50_000,
+    "path_prefixes": "/c/" * 33_333,
+    "path_tokens": "/c/a" * 25_000,
+    "uuid_shapes": (UUID[:-1] + "-") * 2_700,
+    "just_under_token": ("a" * 31 + " ") * 3_125,
+}
+
+
+@pytest.mark.parametrize("text", ADVERSARIAL_INPUTS.values(), ids=ADVERSARIAL_INPUTS.keys())
+def test_redact_stays_linear_on_adversarial_input(text: str) -> None:
+    started = time.perf_counter()
+    redact(text)
+    assert time.perf_counter() - started < REDOS_BUDGET_SECONDS
+
+
+@pytest.mark.parametrize(
+    "address", ["a.b+c@x.mx", "a" * 64 + "@x.mx", "x@" + "d" * 63 + ".example.com"]
+)
+def test_bounded_email_pattern_still_redacts_valid_addresses(address: str) -> None:
+    assert redact(f"mail {address} sent") == "mail [email] sent"
 
 
 def test_a_bad_format_call_never_raises_into_the_caller(
