@@ -133,8 +133,8 @@ class Database:
         """
         try:
             connection = psycopg.connect(self._conninfo, connect_timeout=CONNECT_TIMEOUT_SECONDS)
-        except psycopg.OperationalError as error:
-            # The type only: libpq's message can quote the connection string.
+        except psycopg.Error as error:
+            # The type only: libpq's message, raised or logged, can quote the connection string.
             logger.warning("database role not checked at startup: %s", type(error).__name__)
             return
         with connection:
