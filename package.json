@@ -9,7 +9,12 @@
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "api:sync": "uv sync --locked --directory apps/api",
+    "api:lint": "uv run --directory apps/api ruff check . && uv run --directory apps/api ruff format --check . && uv run --directory apps/api mypy --strict src tests && uv run --directory apps/api lint-imports",
+    "api:test": "uv run --directory apps/api pytest",
+    "api:dev": "uv run --directory apps/api uvicorn pialy.main:app_factory --factory --reload --port 3000",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm api:lint && pnpm api:test"
   },
   "devDependencies": {
     "@eslint/compat": "2.1.0",

@@ -33,7 +33,7 @@ Node 24 (`.nvmrc`), Python 3.13.
 pnpm install
 docker compose -f docker-compose.test.yml up -d   # Postgres for tests (port 54329)
 pnpm lint && pnpm typecheck && pnpm test          # JS
-pnpm api:lint && pnpm api:test                    # Python (once the base's Task 1 lands)
+pnpm api:lint && pnpm api:test                    # Python
 pnpm check                                        # all of it
 ```
 

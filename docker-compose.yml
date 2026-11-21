@@ -1,0 +1,22 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${PIALY_DB_ADMIN_PASSWORD:?set PIALY_DB_ADMIN_PASSWORD}
+      POSTGRES_DB: pialy
+      PIALY_OWNER_PASSWORD: ${PIALY_OWNER_PASSWORD:?set PIALY_OWNER_PASSWORD}
+      PIALY_APP_PASSWORD: ${PIALY_APP_PASSWORD:?set PIALY_APP_PASSWORD}
+    ports:
+      - '${PIALY_DB_PORT:-5432}:5432'
+    volumes:
+      - pialy-pgdata:/var/lib/postgresql/data
+      - ./infra/postgres/init-roles.sh:/docker-entrypoint-initdb.d/10-roles.sh:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d pialy']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pialy-pgdata:

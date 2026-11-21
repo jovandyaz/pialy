@@ -1,0 +1,26 @@
+[importlinter]
+root_packages =
+    pialy
+include_external_packages = True
+
+[importlinter:contract:domain-purity]
+name = Booking domain stays free of frameworks and infrastructure
+type = forbidden
+source_modules =
+    pialy.booking.domain
+forbidden_modules =
+    fastapi
+    psycopg
+    httpx
+    pialy.db
+    pialy.http
+
+[importlinter:contract:fastapi-only-in-http]
+name = Only pialy.http and pialy.main import fastapi
+type = forbidden
+source_modules =
+    pialy.booking
+    pialy.config
+    pialy.clock
+forbidden_modules =
+    fastapi
