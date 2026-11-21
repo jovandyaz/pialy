@@ -149,6 +149,60 @@ def test_uuid_shape_does_not_shelter_real_tokens() -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "address",
+    [f"user+{UUID}@x.mx", f"{UUID}@example.com", f"a.{UUID}@x.mx", f"{UUID.upper()}@x.mx"],
+)
+def test_emails_containing_a_uuid_are_redacted_whole(address: str) -> None:
+    assert redact(f"mail {address} sent") == "mail [email] sent"
+
+
+@pytest.mark.parametrize(
+    "phone",
+    [
+        "55-1234-5678",
+        "55.1234.5678",
+        "(55) 1234 5678",
+        "(55)1234-5678",
+        "55 1234 5678",
+        "+52 55 1234 5678",
+        "+52-55-1234-5678",
+        "52 55 1234 5678",
+        "+52 (55) 1234 5678",
+        "555 123 4567",
+        "555-123-4567",
+        "(555) 123-4567",
+        "+52 555 123 4567",
+    ],
+)
+def test_phones_with_separators_are_redacted(phone: str) -> None:
+    assert redact(f"call {phone} now") == "call [digits] now"
+    assert redact(f"call {phone}") == "call [digits]"
+    assert redact(f"{phone}, then") == "[digits], then"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "at 2026-11-21T01:48:00Z",
+        "at 2026-11-21T01:48:00.123456+00:00",
+        "at 2026-11-21 01:48:00",
+        "GET /api/slots?date=2026-11-15",
+        "took 123 ms for 4567 rows",
+        "ip 192.168.1.100 and 10.0.0.12",
+        "version 1.2.3 build 55-1234",
+        "status 200 in 12.5 ms",
+        f"booking {UUID} ok",
+    ],
+)
+def test_phone_redaction_leaves_ids_timestamps_and_small_numbers(text: str) -> None:
+    assert redact(text) == text
+
+
+def test_phone_next_to_a_uuid_is_redacted_and_the_uuid_kept() -> None:
+    assert redact(f"{UUID} called 55 1234 5678") == f"{UUID} called [digits]"
+
+
 def test_business_id_is_empty_until_bound(capsys: pytest.CaptureFixture[str]) -> None:
     configure_logging("INFO")
     start_request_context()

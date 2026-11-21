@@ -30,6 +30,15 @@ _TOKEN_IN_PATH = re.compile(r"(/(?:api/bookings|api/verify|c|negocio/verificar)/
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{32,}")
 _DIGITS = re.compile(r"\d{10,}")
+# A 10-digit phone with an optional +52/52 prefix, grouped 2-4-4 or 3-3-4 (area code optionally in
+# parentheses) and separated by single spaces, dots or dashes. Only these shapes, so a date, an
+# ISO timestamp, an IP address or a small number is never taken for a phone.
+_SEP = r"[ .-]?"
+_PHONE = re.compile(
+    rf"(?<!\d)(?:\+?52{_SEP})?"
+    rf"(?:(?:\(\d{{2}}\)|\d{{2}}){_SEP}\d{{4}}{_SEP}\d{{4}}"
+    rf"|(?:\(\d{{3}}\)|\d{{3}}){_SEP}\d{{3}}{_SEP}\d{{4}})(?!\d)"
+)
 _HEX = "[0-9a-fA-F]"
 # A canonical UUID is an identifier, not a secret: it stays readable in logs.
 _UUID = re.compile(
@@ -43,17 +52,19 @@ def _shorten_token(match: re.Match[str]) -> str:
 
 
 def _redact_plain(text: str) -> str:
-    text = _EMAIL.sub("[email]", text)
     text = _TOKEN.sub("[token]", text)
+    text = _PHONE.sub("[digits]", text)
     return _DIGITS.sub("[digits]", text)
 
 
 def redact(text: str) -> str:
-    """Hide booking tokens, emails, 32+ character tokens and runs of 10+ digits.
+    """Hide booking tokens, emails, 32+ character tokens, phones and runs of 10+ digits.
 
-    Canonical UUIDs pass through untouched.
+    Canonical UUIDs pass through untouched. Emails are redacted first, on the whole text, so a
+    UUID inside an address (`user+<uuid>@x.mx`) cannot split it and leave a half behind.
     """
     text = _TOKEN_IN_PATH.sub(_shorten_token, text)
+    text = _EMAIL.sub("[email]", text)
     parts = _UUID.split(text)  # odd items are the UUIDs
     return "".join(part if index % 2 else _redact_plain(part) for index, part in enumerate(parts))
 
