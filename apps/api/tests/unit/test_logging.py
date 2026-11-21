@@ -166,6 +166,35 @@ def test_lowercase_file_and_module_names_in_paths_stay_readable(text: str) -> No
     assert redact(text) == text
 
 
+@pytest.mark.parametrize(
+    "segment, expected",
+    [
+        ("a3f0bc1e5bfd2ace", "a3f0…"),  # token_hex(8) shape: 16 characters, 5 digits
+        ("e4bfc7dfa2fcbbc6d5eaa1bfc3d4f6ae", "e4bf…"),  # token_hex(16) shape: 32 characters
+        ("deadbeefcafebabe", "dead…"),  # 16 lowercase hex characters, no digit
+        ("cafebabecafebabecafebabecafebabe", "cafe…"),  # 32 of them, still after a `/`
+        ("security_headers", "security_headers"),  # 16 characters, lowercase, not hex
+        ("_exception_handler", "_exception_handler"),
+    ],
+)
+def test_a_lowercase_hex_segment_is_a_token_but_other_lowercase_names_are_kept(
+    segment: str, expected: str
+) -> None:
+    # Two names in front make it a path, so a 32-character segment is judged on its own.
+    assert redact(f"GET /api/bookings/{segment}") == f"GET /api/bookings/{expected}"
+
+
+def test_the_digit_rule_wins_over_the_lowercase_name_rule() -> None:
+    # 10 or more digits in a lowercase segment: `[digits]`, not the name kept whole.
+    assert redact("GET /api/accounts/clabe-1234567890-ref") == "GET /api/accounts/[digits]"
+
+
+def test_credentials_are_redacted_before_emails() -> None:
+    # The email rule would read `pass@db.example.com` as an address and leave `pass` out of it.
+    text = "postgresql://u:p@localhost/x pass@db.example.com"
+    assert redact(text) == "postgresql://[userinfo]@localhost/x [email]"
+
+
 def test_file_names_stay_readable_in_a_logged_traceback(context: None) -> None:
     traceback_text = "\n".join(
         [
@@ -673,7 +702,16 @@ def test_the_userinfo_of_a_url_is_redacted(text: str, expected: str) -> None:
             "host=localhost password='it\\'s a \\\\ secret' dbname=pialy",
             "host=localhost password=[redacted] dbname=pialy",
         ),
+        (
+            'host=localhost password="a b c" dbname=pialy',
+            "host=localhost password=[redacted] dbname=pialy",
+        ),
+        (
+            'host=localhost password = "it\\"s a \\\\ secret" dbname=pialy',
+            "host=localhost password = [redacted] dbname=pialy",
+        ),
         ("password='never closed and more", "password=[redacted]"),  # libpq would reject it
+        ('password="never closed and more', "password=[redacted]"),
         (
             f"postgresql://localhost/pialy?password={DSN_PASSWORD}",
             "postgresql://localhost/pialy?password=[redacted]",
