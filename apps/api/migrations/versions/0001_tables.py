@@ -46,9 +46,11 @@ DIGITS_ONLY = r"^[0-9]+$"
 # and below a 10-digit phone written as a number.
 AMOUNT_BELOW = 10_000_000
 # datePaid: integer Unix seconds (pey's fixtures: 1790724818 is 2026-09-29), from 2020-01-01 up
-# to 2100-01-01. Milliseconds, or a phone (5512345678 is in 2144) or a CLABE as a number, fall out.
+# to 2_000_000_000 (2033-05-18). Every Mexican 10-digit number starts with 2 to 9, so a phone
+# written as a number (3312345678 as much as 5512345678) falls out, as do milliseconds and a
+# CLABE. Payments from 2033-05-18 on need a revision that raises the bound.
 DATE_PAID_FROM = 1_577_836_800
-DATE_PAID_BELOW = 4_102_444_800
+DATE_PAID_BELOW = 2_000_000_000
 # metadata.bankCode: the payer's bank, by its 3-digit code (as in a CLABE) or 5-digit SPEI one.
 BANK_CODE = r"^[0-9]{3,5}$"
 # metadata.trackingKey: the SPEI clave de rastreo, up to 30 alphanumeric characters

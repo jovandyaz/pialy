@@ -893,7 +893,7 @@ def test_bookings_are_found_by_their_intent(owner_db: Database) -> None:
         with_metadata(trackingKey="12345678901234"),
         with_metadata(trackingKey="TRACK1234567890123456"),
         SANITIZED_QR | {"amount": 9_999_999.99, "datePaid": 1_577_836_800},
-        SANITIZED_QR | {"datePaid": 4_102_444_799},
+        SANITIZED_QR | {"datePaid": 1_999_999_999},
         SANITIZED_QR
         | {"transactionId": "txn_2026-AbCdEf0123456789", "codiQrId": "qr_0A1b2C3d4E5f"},
         SANITIZED_QR | {"transactionId": "T" * 64, "codiQrId": "Q" * 64},
@@ -913,7 +913,7 @@ def test_bookings_are_found_by_their_intent(owner_db: Database) -> None:
         "longest-digits-only-tracking-key",
         "tracking-key-with-letters-and-a-digit-run",
         "largest-amount-first-second-of-2020",
-        "last-second-before-2100",
+        "last-second-below-the-smallest-phone",
         "new-format-ids",
         "longest-ids",
         "shortest-ids",
@@ -965,7 +965,8 @@ def test_payment_events_reject_fields_outside_the_projection(
 # digits alone, the shape of a phone or a CLABE. A tracking key may be digits alone, as the
 # fixture's is, but not 15 or more of them: the length of a CLABE (18) or a card (15 to 19).
 # amount (pesos) and datePaid (Unix seconds) stay within plausible bounds, below the size of a
-# phone or a CLABE written as a number.
+# phone or a CLABE written as a number: a Mexican 10-digit number starts with 2 to 9, so
+# datePaid stays below 2_000_000_000.
 MALFORMED_FIELDS: list[tuple[str, dict[str, object]]] = [
     ("clabe-in-bank-code", with_metadata(bankCode=CLABE)),
     ("clabe-number-in-bank-code", with_metadata(bankCode=int(CLABE))),
@@ -996,6 +997,8 @@ MALFORMED_FIELDS: list[tuple[str, dict[str, object]]] = [
     ("date-paid-fraction", SANITIZED_QR | {"datePaid": 1790724818.5}),
     ("date-paid-before-2020", SANITIZED_QR | {"datePaid": 1_577_836_799}),
     ("date-paid-2100", SANITIZED_QR | {"datePaid": 4_102_444_800}),
+    ("date-paid-smallest-phone", SANITIZED_QR | {"datePaid": 2_000_000_000}),
+    ("date-paid-phone-33", SANITIZED_QR | {"datePaid": 3312345678}),
     ("date-paid-milliseconds", SANITIZED_QR | {"datePaid": 1_790_724_818_000}),
     ("date-paid-phone", SANITIZED_QR | {"datePaid": int(PHONE)}),
     ("date-paid-clabe", SANITIZED_QR | {"datePaid": int(CLABE)}),
