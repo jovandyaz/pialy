@@ -16,6 +16,8 @@ SECRETS_ENV = {
     "AUDIT_HMAC_KEY": "a" * 32,
 }
 
+DEV_ENV = {"ENV": "development", "DATABASE_URL": DATABASE_URL, **SECRETS_ENV}
+
 PROD_ENV = {
     "ENV": "production",
     "DATABASE_URL": DATABASE_URL,
@@ -38,7 +40,7 @@ def failure_text(exc: pytest.ExceptionInfo[SystemExit]) -> str:
 
 
 def test_accepts_minimal_development_env_with_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
-    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV})
+    set_env(monkeypatch, DEV_ENV)
     settings = load_settings()
     assert isinstance(settings, Settings)
     assert settings.env == "development"
@@ -48,8 +50,7 @@ def test_accepts_minimal_development_env_with_defaults(monkeypatch: pytest.Monke
 
 @pytest.mark.parametrize("missing", sorted(SECRETS_ENV))
 def test_development_requires_secrets(monkeypatch: pytest.MonkeyPatch, missing: str) -> None:
-    env = {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV}
-    set_env(monkeypatch, {k: v for k, v in env.items() if k != missing})
+    set_env(monkeypatch, {k: v for k, v in DEV_ENV.items() if k != missing})
     with pytest.raises(SystemExit) as exc:
         load_settings()
     assert missing in failure_text(exc)
@@ -70,7 +71,7 @@ def test_empty_value_in_production_fails_naming_variable(monkeypatch: pytest.Mon
 def test_empty_optional_values_resolve_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
     set_env(
         monkeypatch,
-        {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "WEB_ROOT": "", "SENTRY_DSN": ""},
+        {**DEV_ENV, "WEB_ROOT": "", "SENTRY_DSN": ""},
     )
     settings = load_settings()
     assert settings.web_root is None
@@ -78,7 +79,7 @@ def test_empty_optional_values_resolve_to_none(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_rejects_phone_hash_salt_shorter_than_16(monkeypatch: pytest.MonkeyPatch) -> None:
-    env = {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "PHONE_HASH_SALT": "p" * 15}
+    env = {**DEV_ENV, "PHONE_HASH_SALT": "p" * 15}
     set_env(monkeypatch, env)
     with pytest.raises(SystemExit) as exc:
         load_settings()
@@ -92,7 +93,7 @@ def test_requires_database_url() -> None:
 
 
 def test_rejects_deposit_max_above_1_while_hackathon(monkeypatch: pytest.MonkeyPatch) -> None:
-    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, "DEPOSIT_MAX_MINOR": "2"})
+    set_env(monkeypatch, {**DEV_ENV, "DEPOSIT_MAX_MINOR": "2"})
     with pytest.raises(SystemExit) as exc:
         load_settings()
     assert "DEPOSIT_MAX_MINOR" in failure_text(exc)
@@ -125,7 +126,7 @@ def test_requires_every_key_and_endpoint_in_production(
 
 def test_never_echoes_values_in_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     leaked = "short-value-that-must-not-leak"
-    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "SESSION_SECRET": leaked})
+    set_env(monkeypatch, {**DEV_ENV, "SESSION_SECRET": leaked})
     with pytest.raises(SystemExit) as exc:
         load_settings()
     assert "SESSION_SECRET" in failure_text(exc)
@@ -134,7 +135,7 @@ def test_never_echoes_values_in_errors(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_rejects_session_secret_shorter_than_32(monkeypatch: pytest.MonkeyPatch) -> None:
-    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "SESSION_SECRET": "s" * 31})
+    set_env(monkeypatch, {**DEV_ENV, "SESSION_SECRET": "s" * 31})
     with pytest.raises(SystemExit) as exc:
         load_settings()
     assert "SESSION_SECRET" in failure_text(exc)
@@ -144,7 +145,7 @@ def test_rejects_session_secret_shorter_than_32(monkeypatch: pytest.MonkeyPatch)
 
 def test_rejects_credentials_key_not_32_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     bad = base64.b64encode(b"k" * 16).decode()
-    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "CREDENTIALS_ENC_KEY": bad})
+    set_env(monkeypatch, {**DEV_ENV, "CREDENTIALS_ENC_KEY": bad})
     with pytest.raises(SystemExit) as exc:
         load_settings()
     assert "CREDENTIALS_ENC_KEY" in failure_text(exc)
@@ -154,15 +155,13 @@ def test_rejects_credentials_key_not_32_bytes(monkeypatch: pytest.MonkeyPatch) -
 def test_accepts_versioned_credentials_key_list(monkeypatch: pytest.MonkeyPatch) -> None:
     other = base64.b64encode(b"o" * 32).decode()
     value = f"v2:{other},v1:{KEY_32}"
-    set_env(
-        monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "CREDENTIALS_ENC_KEY": value}
-    )
+    set_env(monkeypatch, {**DEV_ENV, "CREDENTIALS_ENC_KEY": value})
     assert load_settings().credentials_enc_key.get_secret_value() == value
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "65536", "abc"])
 def test_rejects_port_outside_1_to_65535(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
-    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "PORT": value})
+    set_env(monkeypatch, {**DEV_ENV, "PORT": value})
     with pytest.raises(SystemExit) as exc:
         load_settings()
     assert "PORT" in failure_text(exc)
@@ -170,7 +169,7 @@ def test_rejects_port_outside_1_to_65535(monkeypatch: pytest.MonkeyPatch, value:
 
 @pytest.mark.parametrize("value", [1, 8080, 65535])
 def test_accepts_ports_inside_the_range(monkeypatch: pytest.MonkeyPatch, value: int) -> None:
-    set_env(monkeypatch, {"DATABASE_URL": DATABASE_URL, **SECRETS_ENV, "PORT": str(value)})
+    set_env(monkeypatch, {**DEV_ENV, "PORT": str(value)})
     assert load_settings().port == value
 
 
@@ -205,9 +204,72 @@ def test_a_stray_env_file_in_the_cwd_is_ignored_in_tests(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # A developer's filled-in apps/api/.env must not satisfy the missing-variable tests.
-    env = {"ENV": "development", "DATABASE_URL": DATABASE_URL, **SECRETS_ENV}
-    (tmp_path / ".env").write_text("".join(f"{name}={value}\n" for name, value in env.items()))
+    (tmp_path / ".env").write_text("".join(f"{name}={value}\n" for name, value in DEV_ENV.items()))
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit) as exc:
         load_settings()
     assert "DATABASE_URL" in failure_text(exc)
+
+
+def test_env_is_required_outside_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(monkeypatch, {k: v for k, v in DEV_ENV.items() if k != "ENV"})
+    with pytest.raises(SystemExit) as exc:
+        load_settings()
+    assert failure_text(exc) == "Invalid configuration: ENV"
+
+
+@pytest.mark.parametrize("value", ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
+def test_accepts_the_standard_log_levels(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    set_env(monkeypatch, {**DEV_ENV, "LOG_LEVEL": value})
+    assert load_settings().log_level == value
+
+
+@pytest.mark.parametrize("value", ["LOUD", "info", "5512345678"])
+def test_rejects_an_unknown_log_level_naming_only_the_variable(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    set_env(monkeypatch, {**DEV_ENV, "LOG_LEVEL": value})
+    with pytest.raises(SystemExit) as exc:
+        load_settings()
+    assert failure_text(exc) == "Invalid configuration: LOG_LEVEL"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "postgresql://u:p@localhost/db",
+        "postgres://u:p@db.internal:5432/pialy?sslmode=require",
+        "host=localhost dbname=pialy user=pialy_app",
+    ],
+)
+def test_accepts_postgres_connection_strings(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    set_env(monkeypatch, {**DEV_ENV, "DATABASE_URL": value, "MIGRATION_DATABASE_URL": value})
+    settings = load_settings()
+    assert settings.database_url.get_secret_value() == value
+    assert settings.migration_database_url is not None
+
+
+LEAK_MARKER = "hunter2-marker"
+
+
+@pytest.mark.parametrize("name", ["DATABASE_URL", "MIGRATION_DATABASE_URL"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        f"not-a-dsn {LEAK_MARKER}",
+        f"postgresql://u:{LEAK_MARKER}@[bad/db",  # libpq quotes the whole URI in its error
+        f"mysql://u:{LEAK_MARKER}@h/db",
+        f"postgresql://u:{LEAK_MARKER}@h/db?bogus=1",
+        f"password={LEAK_MARKER} foo=bar",
+    ],
+)
+def test_rejects_a_bad_database_url_naming_only_the_variable(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    set_env(monkeypatch, {**DEV_ENV, name: value})
+    with pytest.raises(SystemExit) as exc:
+        load_settings()
+    assert failure_text(exc) == f"Invalid configuration: {name}"
+    with pytest.raises(ValidationError) as error:
+        Settings()
+    assert LEAK_MARKER not in str(error.value.errors(include_input=False, include_url=False))

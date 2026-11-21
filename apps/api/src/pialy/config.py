@@ -1,6 +1,6 @@
 """Process settings, read from the environment and validated at startup.
 
-The four keys (phone_hash_salt, session_secret, credentials_enc_key,
+ENV has no default. The four keys (phone_hash_salt, session_secret, credentials_enc_key,
 audit_hmac_key) are required in development and production. Only env == "test"
 gets random per-process values, and only under pytest. Empty variables count as unset.
 """
@@ -12,6 +12,8 @@ import secrets
 from pathlib import Path
 from typing import Literal, Self
 
+import psycopg
+from psycopg.conninfo import conninfo_to_dict
 from pydantic import AnyHttpUrl, Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -42,7 +44,7 @@ class Settings(BaseSettings):
         frozen=True, extra="ignore", env_file=".env", env_ignore_empty=True
     )
 
-    env: Literal["development", "test", "production"] = "development"
+    env: Literal["development", "test", "production"]  # no default: a deploy states its own
     port: int = Field(default=3000, ge=1, le=65535)
     database_url: SecretStr
     migration_database_url: SecretStr | None = None
@@ -55,7 +57,7 @@ class Settings(BaseSettings):
     public_origin: AnyHttpUrl = AnyHttpUrl("http://localhost:3000")
     audit_hmac_key: SecretStr = Field(min_length=32)
     sentry_dsn: SecretStr | None = None
-    log_level: str = "INFO"
+    log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
 
     @model_validator(mode="before")
     @classmethod
@@ -73,6 +75,16 @@ class Settings(BaseSettings):
                 **data,
             }
         return data
+
+    @field_validator("database_url", "migration_database_url")
+    @classmethod
+    def _valid_conninfo(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is not None:
+            try:
+                conninfo_to_dict(value.get_secret_value())
+            except psycopg.Error:  # libpq's message quotes the string, password included
+                raise ValueError("must be a PostgreSQL connection string") from None
+        return value
 
     @field_validator("credentials_enc_key")
     @classmethod
