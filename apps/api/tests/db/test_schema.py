@@ -39,6 +39,8 @@ T0 = datetime(2026, 11, 20, 15, 0, tzinfo=UTC)
 SALT = b"schema-tests-only-salt"
 CLABE = "123456789012345678"
 PHONE = "5512345678"
+# Synthetic too: a ten-digit number under another area code, listed in the root AGENTS.md.
+OTHER_PHONE = "3312345678"
 MASKED_CLABE = "**************5678"
 # sha256 of agent-toolkit's audit schema.sql, which migration 0001 runs byte for byte.
 AUDIT_SCHEMA_SHA256 = "f79eab4b060b7f174bb184192d94c746b7c8ef9acbe1d76036d6bf049379ae52"
@@ -1006,7 +1008,7 @@ MALFORMED_FIELDS: list[tuple[str, dict[str, object]]] = [
     ("date-paid-before-2020", SANITIZED_QR | {"datePaid": 1_577_836_799}),
     ("date-paid-2100", SANITIZED_QR | {"datePaid": 4_102_444_800}),
     ("date-paid-smallest-phone", SANITIZED_QR | {"datePaid": 2_000_000_000}),
-    ("date-paid-phone-33", SANITIZED_QR | {"datePaid": 3312345678}),
+    ("date-paid-phone-33", SANITIZED_QR | {"datePaid": int(OTHER_PHONE)}),
     ("date-paid-milliseconds", SANITIZED_QR | {"datePaid": 1_790_724_818_000}),
     ("date-paid-phone", SANITIZED_QR | {"datePaid": int(PHONE)}),
     ("date-paid-clabe", SANITIZED_QR | {"datePaid": int(CLABE)}),

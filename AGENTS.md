@@ -39,7 +39,7 @@ pnpm check                                        # all of it
 
 ## Rules
 - Public repo: no secrets, real CLABEs, people's names, phone numbers or pey operational details
-  in code, fixtures, docs or commits. Fixtures are synthetic (`123456789012345678`, `5512345678`).
+  in code, fixtures, docs or commits. Fixtures are synthetic (`123456789012345678`, `5512345678`, `3312345678`).
 - Secrets go in the Keychain or in `.env` (git-ignored). Never in chat, the repo or shell history.
 - Money is an integer in minor units plus an ISO 4217 currency, never a float.
   `DEPOSIT_MAX_MINOR` is 1 during the hackathon.
