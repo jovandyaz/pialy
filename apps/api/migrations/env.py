@@ -38,7 +38,12 @@ def run_migrations_online() -> None:
     conninfo = _conninfo()
 
     def connect() -> psycopg.Connection[TupleRow]:
-        return psycopg.connect(conninfo)
+        try:
+            return psycopg.connect(conninfo)
+        except psycopg.Error as error:
+            # The type only: libpq's message, and so the traceback, can quote the whole
+            # connection string, password included.
+            raise SystemExit(f"cannot connect: {type(error).__name__}") from None
 
     # psycopg makes the connection; SQLAlchemy only provides the dialect Alembic needs.
     engine = create_engine("postgresql+psycopg://", creator=connect, poolclass=pool.NullPool)
