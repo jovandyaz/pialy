@@ -7,6 +7,7 @@ import pytest
 
 from pialy.observability.logging import (
     bind,
+    bind_route,
     configure_logging,
     log_event,
     redact,
@@ -134,6 +135,34 @@ def test_bound_fields_cannot_override_the_base_keys(
     assert line["ts"] != "forged"
     assert not {"event", "exc", "stack"} & set(line)
     assert line["business_id"] == "biz-1"  # business_id and route stay bindable
+
+
+def test_bound_fields_and_the_route_are_redacted_too(
+    capsys: pytest.CaptureFixture[str], context: None
+) -> None:
+    configure_logging("INFO")
+    start_request_context()
+    bind(business_id=UUID, user=EMAIL, note=f"call {PHONE}")
+    bind_route(lambda: f"/stores/{EMAIL}/boom")
+    logging.getLogger("x").info("hello")
+    [line] = lines(capsys)
+    assert line["business_id"] == UUID  # identifiers survive
+    assert line["user"] == "[email]"
+    assert line["note"] == "call [digits]"
+    assert line["route"] == "/stores/[email]/boom"
+    assert EMAIL not in json.dumps(line)
+    assert PHONE not in json.dumps(line)
+
+
+def test_a_bound_route_override_is_redacted_too(
+    capsys: pytest.CaptureFixture[str], context: None
+) -> None:
+    configure_logging("INFO")
+    start_request_context()
+    bind(route=f"/api/slots?phone={PHONE}")
+    logging.getLogger("x").info("hello")
+    [line] = lines(capsys)
+    assert line["route"] == "/api/slots?phone=[digits]"
 
 
 def test_level_filters_and_rejects_unknown(capsys: pytest.CaptureFixture[str]) -> None:

@@ -1,8 +1,9 @@
 """JSON logs on stdout with redaction of personal data and secrets.
 
 Every line carries the request id and the fields bound for the request. The redaction
-filter runs on the message, the exception text and the event fields, so a phone, an email,
-a token or a CLABE inside an exception message never reaches the output.
+filter runs on the message, the exception text and the event fields, and the formatter on every
+extra field (event, bound and route), so a phone, an email, a token or a CLABE inside an
+exception message or a bound value never reaches the output.
 """
 
 import json
@@ -252,7 +253,7 @@ _RESERVED_KEYS = frozenset(
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         fields: Mapping[str, str | int] = getattr(record, _FIELDS_ATTR, {})
-        extras: dict[str, object] = {"business_id": "", **fields}  # empty until tenancy binds it
+        extras: dict[str, str | int] = {"business_id": "", **fields}  # empty until tenancy binds it
         resolver = _route.get()
         if resolver is not None:
             extras["route"] = resolver()
@@ -263,7 +264,11 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "message": record.getMessage(),
             "request_id": request_id.get(),
-            **{key: value for key, value in extras.items() if key not in _RESERVED_KEYS},
+            **{
+                key: _redact_field(value)  # fail closed: bound and route values are not filtered
+                for key, value in extras.items()
+                if key not in _RESERVED_KEYS
+            },
         }
         event: str | None = getattr(record, _EVENT_ATTR, None)
         if event is not None:
