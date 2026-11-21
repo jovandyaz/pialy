@@ -26,8 +26,9 @@ def create_app(
         # Sync handlers run in AnyIO's threadpool; never more of them than pooled connections
         # (spec §12b). The limiter belongs to the running event loop, hence here.
         to_thread.current_default_thread_limiter().total_tokens = database.max_size
-        # A role that bypasses row-level security would serve every business (spec §5b).
-        await to_thread.run_sync(database.refuse_privileged_role)
+        # A role that bypasses row-level security would serve every business (spec §5b), and a
+        # session without the time limits could hold a connection without bound (spec §12b).
+        await to_thread.run_sync(database.vet_connection)
         database.open()
         try:
             yield

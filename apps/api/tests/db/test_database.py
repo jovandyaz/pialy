@@ -9,10 +9,16 @@ from psycopg import errors, sql
 from psycopg.conninfo import make_conninfo
 from psycopg_pool import PoolTimeout
 
-from pialy.db.database import Database, PgConnection
+from pialy.db.database import (
+    SESSION_LIMITS,
+    Database,
+    PgConnection,
+    SessionLimitsError,
+    _vet_connection,
+)
 from pialy.db.locks import advisory_key
 from pialy.tenancy.context import OwnerActor, TenantContext
-from tests.db.support import ThrowawayDatabase, database_at_url
+from tests.db.support import ThrowawayDatabase, app_settings, database_at_url
 
 # A transaction-local setting reads as '' (not NULL) on that connection once it has ended,
 # hence nullif, as the policies of Task 5 do.
@@ -125,6 +131,34 @@ def test_the_time_limits_join_the_startup_options_of_the_url(
                 limits = connection.execute(TIME_LIMITS).fetchone()
                 work_mem = connection.execute("SELECT current_setting('work_mem')").fetchone()
             assert (limits, work_mem) == (("5s", "2s", "15s"), ("8MB",))
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        pytest.param("", id="dropped"),  # as a pooler that drops the startup options would
+        pytest.param(f"{SESSION_LIMITS} -c statement_timeout=1min", id="statement"),
+        pytest.param(f"{SESSION_LIMITS} -c lock_timeout=0", id="lock"),
+        pytest.param(f"{SESSION_LIMITS} -c idle_in_transaction_session_timeout=1h", id="idle"),
+    ],
+)
+def test_a_connection_without_the_time_limits_is_refused_and_closed(
+    migrated_database: ThrowawayDatabase, options: str
+) -> None:
+    with psycopg.connect(migrated_database.app_url, options=options) as connection:
+        with pytest.raises(SessionLimitsError, match="time limits"):
+            _vet_connection(connection)
+        assert connection.closed
+
+
+def test_startup_refuses_a_session_without_the_time_limits(
+    migrated_database: ThrowawayDatabase, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The service's options never reach the server, as behind a pooler that drops them.
+    monkeypatch.setattr("pialy.db.database.SESSION_LIMITS", "")
+    database = Database(app_settings(migrated_database.app_url))
+    with pytest.raises(SessionLimitsError):
+        database.vet_connection()
 
 
 def terminate(url: str, backend_pid: int) -> None:

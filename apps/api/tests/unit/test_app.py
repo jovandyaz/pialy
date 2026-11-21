@@ -49,17 +49,17 @@ def test_threadpool_is_no_larger_than_the_connection_pool(monkeypatch: pytest.Mo
     assert app.state.database.max_size == 10
 
 
-def test_an_unreachable_database_leaves_the_role_unchecked_but_logged(
+def test_an_unreachable_database_leaves_the_connection_unvetted_but_logged(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    # The app still starts (readiness reports the database); the pools vet the role later.
+    # The app still starts (readiness reports the database); the pools vet connections later.
     monkeypatch.setenv("ENV", "test")
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:dsn-marker-pw@127.0.0.1:1/none")
     app = create_app(Settings(), system_clock, readiness=lambda: True)
     with caplog.at_level(logging.WARNING, logger="pialy.db"), TestClient(app) as client:
         assert client.get("/healthz").status_code == 200
     [warning] = [r for r in caplog.records if r.name == "pialy.db"]
-    assert warning.getMessage() == "database role not checked at startup: OperationalError"
+    assert warning.getMessage() == "database connection not vetted at startup: OperationalError"
     assert "dsn-marker-pw" not in caplog.text
 
 

@@ -13,7 +13,7 @@ from psycopg.conninfo import make_conninfo
 from psycopg_pool import PoolTimeout
 
 from pialy.clock import system_clock
-from pialy.db.database import Database, PrivilegedRoleError, _refuse_privileged_role
+from pialy.db.database import Database, PrivilegedRoleError, _vet_connection
 from pialy.main import create_app
 from tests.db.support import ThrowawayDatabase, app_settings
 
@@ -91,5 +91,5 @@ def test_a_check_that_fails_closes_its_connection(
     with psycopg.connect(migrated_database.app_url) as connection:
         monkeypatch.setattr(connection, "execute", fail)
         with pytest.raises(type(failure)):
-            _refuse_privileged_role(connection)
+            _vet_connection(connection)
         assert connection.closed
